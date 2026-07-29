@@ -1,0 +1,60 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    environment:
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
+      MYSQL_QUERY_TIMEOUT_MS: "30000"
+      REDIS_URL: redis://redis:6379
+      REDIS_CACHE_ENABLED: "true"
+      REDIS_CACHE_REQUIRED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  snapshot-builder:
+    environment:
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
+      MYSQL_QUERY_TIMEOUT_MS: "30000"
+      REDIS_URL: redis://redis:6379
+      REDIS_CACHE_ENABLED: "true"
+      REDIS_CACHE_REQUIRED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  snapshot-worker:
+    environment:
+      MYSQL_HOST: ${DOCKER_MYSQL_HOST:-${MYSQL_HOST:-host.docker.internal}}
+      MYSQL_QUERY_TIMEOUT_MS: "30000"
+      REDIS_URL: redis://redis:6379
+      REDIS_CACHE_ENABLED: "true"
+      REDIS_CACHE_REQUIRED: "true"
+      SNAPSHOT_REFRESH_INTERVAL_MINUTES: ${SNAPSHOT_REFRESH_INTERVAL_MINUTES:-30}
+      SNAPSHOT_REFRESH_OFFSET_MINUTES: ${SNAPSHOT_REFRESH_OFFSET_MINUTES:-12}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy

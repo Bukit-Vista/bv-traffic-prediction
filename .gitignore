@@ -1,0 +1,11 @@
+.next
+.next-dev
+node_modules
+data
+coverage
+test-results
+playwright-report
+.env
+.data
+*.log
+.docker-buildx

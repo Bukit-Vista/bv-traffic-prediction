@@ -1,0 +1,20 @@
+{
+  "version": "gravity-v1",
+  "alpha": 0.7,
+  "gamma": 1.2,
+  "betaPerMinute": 0.04,
+  "minimumTrafficConfidence": 0.5,
+  "maximumDestinationsPerOrigin": 30,
+  "presenceWeights": {
+    "inbound": 0.45,
+    "attraction": 0.35,
+    "localActivity": 0.2
+  },
+  "confidenceWeights": {
+    "inputCoverage": 0.4,
+    "traffic": 0.3,
+    "poiCompleteness": 0.2,
+    "travelTimeFreshness": 0.1
+  }
+}
+

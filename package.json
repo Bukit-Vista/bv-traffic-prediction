@@ -1,0 +1,59 @@
+{
+  "name": "bali-route-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11"
+  },
+  "scripts": {
+    "dev:web": "next dev",
+    "dev": "npm run dev:web",
+    "boundary:import": "node --import tsx scripts/import-bali-boundary.ts",
+    "boundary:validate": "node --import tsx scripts/import-bali-boundary.ts --check",
+    "geography:import-demo": "node --import tsx scripts/import-demo-geography.ts",
+    "db:check": "tsx scripts/db-check.ts",
+    "cutover:reconcile": "node --import tsx scripts/reconcile-here-cutover.ts",
+    "release:gate": "node --import tsx scripts/check-step3-release-gate.ts",
+    "release:gate:mvp": "node --import tsx scripts/check-mvp-12-hour-window.ts",
+    "release:gate:mobility-v2": "node --import tsx scripts/check-gravity-v2-public-release-gate.ts",
+    "snapshot:build": "node --import tsx scripts/build-traffic-snapshot.ts",
+    "snapshot:worker": "node --import tsx scripts/run-traffic-snapshot-worker.ts",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "@maplibre/geojson-vt": "^6.1.1",
+    "@maplibre/vt-pbf": "^4.3.2",
+    "dotenv": "^16.4.7",
+    "lucide-react": "^0.468.0",
+    "maplibre-gl": "^5.24.0",
+    "mysql2": "^3.22.6",
+    "next": "^15.5.21",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.0",
+    "redis": "^5.12.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "postcss": "^8.5.10",
+    "sharp": "^0.35.0"
+  }
+}

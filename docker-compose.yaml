@@ -1,0 +1,45 @@
+name: bali-traffic
+
+x-runtime: &runtime
+  env_file:
+    - path: ${APP_ENV_FILE:-.env}
+      required: true
+  environment:
+    NODE_ENV: production
+  init: true
+
+services:
+  web:
+    <<: *runtime
+    image: ${APP_WEB_IMAGE:-bali-route-intelligence-web:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web-runtime
+    command: ["node", "server.js"]
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    restart: unless-stopped
+
+  snapshot-builder:
+    <<: *runtime
+    image: ${APP_WORKER_IMAGE:-bali-route-intelligence-worker:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-runtime
+    command: ["node", "--import", "tsx", "scripts/build-traffic-snapshot.ts"]
+    profiles: ["maintenance"]
+    restart: "no"
+
+  snapshot-worker:
+    <<: *runtime
+    image: ${APP_WORKER_IMAGE:-bali-route-intelligence-worker:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-runtime
+    command: ["node", "--import", "tsx", "scripts/run-traffic-snapshot-worker.ts"]
+    restart: unless-stopped
+    healthcheck:
+      disable: true

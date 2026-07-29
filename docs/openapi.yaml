@@ -1,0 +1,420 @@
+# Last reviewed: 30 July 2026
+openapi: 3.1.0
+info:
+  title: Bali HERE Traffic and Route API
+  version: 3.3.0
+  description: >-
+    Current read-only public API for HERE traffic, airport routes, source health,
+    exports, and feature-gated relative mobility. Latest traffic is served from
+    validated Redis snapshots when available and follows a rolling 12 completed
+    UTC-hour history contract. OSM is cartographic context only; unsupported
+    features never return fixtures. Public gravity-here-v2 catchments require
+    both the application rollout flag and database public-serving readiness.
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    operationsBearer:
+      type: http
+      scheme: bearer
+  parameters:
+    Bbox:
+      name: bbox
+      in: query
+      required: true
+      schema: { type: string, example: "114.34,-8.90,115.78,-8.03" }
+    At:
+      name: at
+      in: query
+      schema: { type: string, default: latest, description: "latest or an exact UTC collection slot" }
+  schemas:
+    Meta:
+      type: object
+      required: [requestId, generatedAt, requestedAtUtc, selectedSlot, slotUtc, collectionSlotUtc, requestedSlotUtc, actualSlotUtc, windowStartUtc, windowEndExclusiveUtc, windowHours, source, sourceRunId, status, stale, isStale, isFallback, freshnessState, freshnessSeconds, coverage, confidence, semantics, disclaimer]
+      properties:
+        requestId: { type: string }
+        generatedAt: { type: string, format: date-time }
+        requestedAtUtc: { type: string, format: date-time }
+        selectedSlot: { type: [string, "null"], deprecated: true, description: "Compatibility alias for slotUtc" }
+        slotUtc: { type: [string, "null"], format: date-time }
+        collectionSlotUtc: { type: [string, "null"], format: date-time }
+        requestedSlotUtc: { type: [string, "null"], description: "latest, an exact slot, or the requested window boundary" }
+        actualSlotUtc: { type: [string, "null"], format: date-time }
+        windowStartUtc: { type: [string, "null"], format: date-time }
+        windowEndExclusiveUtc: { type: [string, "null"], format: date-time }
+        windowHours: { type: [integer, "null"], minimum: 1 }
+        source: { type: string }
+        sourceRunId: { type: [string, "null"] }
+        modelRunId: { type: [string, "null"] }
+        modelVersion: { type: [string, "null"] }
+        status: { enum: [running, success, complete, partial, failed, fresh, stale, unavailable] }
+        stale: { type: boolean }
+        isStale: { type: boolean }
+        isFallback: { type: boolean }
+        freshnessState: { enum: [fresh, stale, critically_stale, unknown] }
+        freshnessSeconds: { type: [integer, "null"] }
+        coverage: { type: [number, "null"], minimum: 0, maximum: 1 }
+        confidence: { type: [number, "null"], minimum: 0, maximum: 1 }
+        semantics:
+          type: [string, "null"]
+          enum: [measured_traffic, measured_route_condition, predicted_relative_mobility, source_derived_places_heatmap, source_activity_centers, null]
+        disclaimer: { type: string }
+        routePurpose: { type: [string, "null"], enum: [airport_tourism, null] }
+        routeGroupKey: { type: [string, "null"] }
+        tourismCenterKey: { type: [string, "null"] }
+        routeDirection: { type: [string, "null"], enum: [from_airport, to_airport, null] }
+    AirportTourismRoute:
+      type: object
+      required: [id, routePurpose, routeGroupKey, tourismCenterKey, routeDirection, currentDurationSeconds, typicalDurationSeconds, collectionSlotUtc, geometryAvailable]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        routePurpose: { const: airport_tourism }
+        routeGroupKey: { type: string, example: dps-canggu }
+        tourismCenterKey: { type: string, example: canggu }
+        routeDirection: { enum: [from_airport, to_airport] }
+        currentDurationSeconds: { type: [integer, "null"] }
+        typicalDurationSeconds: { type: [integer, "null"] }
+        baseDurationSeconds: { type: [integer, "null"] }
+        delayVsTypicalSeconds: { type: [integer, "null"], description: "Negative values mean faster than typical." }
+        ratioVsTypical: { type: [number, "null"] }
+        collectionSlotUtc: { type: [string, "null"], format: date-time }
+        geometryAvailable: { type: boolean }
+    AirportCorridor:
+      type: object
+      required: [routeGroupKey, tourismCenterKey, directions]
+      properties:
+        routeGroupKey: { type: string }
+        tourismCenterKey: { type: string }
+        directions:
+          type: object
+          description: Directional samples remain independent and are never averaged or copied.
+          properties:
+            fromAirport: { oneOf: [{ $ref: "#/components/schemas/AirportTourismRoute" }, { type: "null" }] }
+            toAirport: { oneOf: [{ $ref: "#/components/schemas/AirportTourismRoute" }, { type: "null" }] }
+    FeatureCollection:
+      type: object
+      required: [type, features, meta]
+      properties:
+        type: { const: FeatureCollection }
+        features: { type: array, items: { type: object } }
+        meta: { $ref: "#/components/schemas/Meta" }
+    FeatureNotReady:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { const: FEATURE_NOT_READY }
+            feature: { type: string }
+            message: { type: string }
+        meta: { $ref: "#/components/schemas/Meta" }
+paths:
+  /health:
+    get:
+      summary: Application, read-only database, and configured Redis readiness
+      description: Does not contact HERE or start a collection.
+      responses: { "200": { description: Application, database, and Redis ready }, "503": { description: Required database or cache dependency unavailable } }
+  /dashboard/version:
+    get:
+      summary: Lightweight Flow, Route, and collection-health version synchronization
+      description: Send If-None-Match on subsequent requests. Returns 304 with no body when all resource versions are unchanged.
+      responses:
+        "200": { description: Stable per-resource version tokens and an ETag }
+        "304": { description: No dashboard resource version changed }
+  /dashboard/refresh:
+    post:
+      summary: Explicitly rebuild or reconcile the latest dashboard cache
+      description: Recovery and maintenance endpoint. Normal latest-mode updates are automatic through the worker and version polling.
+      responses:
+        "200": { description: Current dashboard and cache action }
+        "503": { description: No valid source or snapshot can be served }
+  /traffic/overview:
+    get:
+      summary: Latest Flow and Route collector source status
+      description: The Flow and Route sources array is read from api_collector_alert_state_v1; provider error payloads are never exposed.
+      responses: { "200": { description: Exactly one Flow state and one Route state }, "304": { description: Source identity unchanged }, "503": { description: Current source state unavailable } }
+  /traffic/window-status:
+    get:
+      summary: Current rolling 12 completed UTC-hour source acceptance status
+      description: Reports the current half-open window only. Missing slots and geometries are explicit; an older complete window is never substituted.
+      parameters:
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, default: 12 } }
+      responses:
+        "200": { description: Flow 24-slot and Route 12-slot coverage, passed counts, samples, geometries, and missing-slot identities }
+        "400": { description: Window exceeds the configured server maximum }
+        "503": { description: Versioned source-history contracts unavailable }
+  /traffic/snapshot:
+    get:
+      summary: Current validated Redis dashboard and vector-tile snapshot
+      description: Returns the immutable ready-to-use dashboard payload selected by the Redis current-version pointer. Supports If-None-Match.
+      responses: { "200": { description: Dashboard snapshot and traffic tile manifest }, "304": { description: Snapshot version unchanged }, "503": { description: No valid snapshot is active } }
+  /traffic/tiles/{version}/{z}/{x}/{y}:
+    get:
+      summary: Immutable compressed HERE traffic vector tile
+      parameters:
+        - { name: version, in: path, required: true, schema: { type: string } }
+        - { name: z, in: path, required: true, schema: { type: integer } }
+        - { name: x, in: path, required: true, schema: { type: integer } }
+        - { name: y, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Gzipped Mapbox Vector Tile with traffic_lines and traffic_pulse_points layers }, "404": { description: Valid tile coordinate with no traffic features } }
+  /flow/slots:
+    get:
+      summary: Eligible exact 30-minute Flow slots in the rolling completed-hour window
+      parameters:
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, default: 12 } }
+      responses: { "200": { description: Slots } }
+  /flow/map:
+    get:
+      summary: Viewport-bounded HERE Flow segments
+      parameters: [{ $ref: "#/components/parameters/Bbox" }, { $ref: "#/components/parameters/At" }]
+      responses:
+        "200":
+          description: Flow GeoJSON with collection, source-update, and fetch timestamps
+          content: { application/geo+json: { schema: { $ref: "#/components/schemas/FeatureCollection" } } }
+        "400": { description: Invalid Bali viewport, slot, or limit }
+        "304": { description: Source run and normalized viewport/filter scope unchanged }
+        "503": { description: Current or exact-slot data unavailable }
+  /flow/segments/{segmentId}/history:
+    get:
+      summary: One road segment's measured 30-minute history
+      parameters:
+        - { name: segmentId, in: path, required: true, schema: { type: integer } }
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, default: 12 } }
+      responses:
+        "200": { description: Ordered measured history, coverage, and missing-slot identity }
+        "400": { description: Invalid segment or window }
+        "503": { description: History source unavailable }
+  /routes:
+    get:
+      summary: Fourteen versioned airport-tourism route definitions
+      description: Reads api_airport_tourism_routes_v1. This is configuration only and contains no measurements or predictions.
+      responses:
+        "200":
+          description: Fourteen directional definitions in seven route groups
+        "304": { description: Route definitions unchanged }
+        "503": { description: Feature gate or serving contract unavailable }
+  /routes/latest:
+    get:
+      summary: Latest independent HERE measurement for every airport-tourism route
+      description: Latest mode reads api_airport_route_latest_v1. Optional exact-slot compatibility reads remain pinned and never use nearest data.
+      parameters: [{ $ref: "#/components/parameters/At" }]
+      responses:
+        "200": { description: Fourteen measured route conditions grouped into seven corridors }
+        "304": { description: Selected route measurements unchanged }
+        "503": { description: Latest or exact-slot measurements unavailable }
+  /routes/slots:
+    get:
+      summary: Airport-route slot availability in the rolling completed-hour window
+      parameters:
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, default: 12 } }
+      responses: { "200": { description: Exact route slots from api_airport_route_slots_v1 } }
+  /mobility/scope:
+    get:
+      summary: Versioned product semantics and launch gate
+      description: Configuration only. A draft scope with predictionEnabled=false remains readable and must not activate predictions.
+      responses: { "200": { description: api_mobility_scope_v1 contract } }
+  /mobility/airport-destinations/config:
+    get:
+      summary: Fixed ordered airport destination candidate registry
+      description: Configuration only; it does not return shares, scores, people counts, or destination predictions.
+      responses: { "200": { description: Seven api_airport_destinations_v1 rows } }
+  /routes/{routeId}/history:
+    get:
+      summary: One airport-tourism direction's exact collection-slot history with negative delays preserved
+      description: Reads api_airport_route_history_v1 over the last 12 completed UTC clock-hours. Coverage lists missing slots, which the UI renders as gaps rather than zero values.
+      parameters:
+        - { name: routeId, in: path, required: true, schema: { type: integer } }
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, default: 12 } }
+      responses: { "200": { description: Ascending route history with expected/present coverage and missing slot identities }, "400": { description: Invalid or excessive range }, "404": { description: ROUTE_NOT_FOUND }, "429": { description: Rate limited } }
+  /routes/{routeId}/geometry:
+    get:
+      summary: Every ordered actual HERE LINESTRING section for one airport-tourism direction
+      parameters:
+        - { name: routeId, in: path, required: true, schema: { type: integer } }
+        - { $ref: "#/components/parameters/At" }
+      responses: { "200": { description: Route GeoJSON }, "404": { description: ROUTE_NOT_FOUND or SLOT_NOT_FOUND }, "429": { description: Rate limited }, "503": { description: Current data unavailable } }
+  /routes/{routeId}/latest:
+    get:
+      summary: Latest independent HERE condition for one airport-tourism route
+      parameters:
+        - { name: routeId, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Measured route condition }, "304": { description: Route condition unchanged }, "404": { description: ROUTE_NOT_FOUND } }
+  /mobility/readiness:
+    get:
+      summary: Feature-gated prediction-serving readiness
+      responses: { "200": { description: Readiness, latest model identity, coverage, and disclaimer }, "503": { description: Mobility serving unavailable } }
+  /mobility/overview:
+    get:
+      summary: Feature-gated relative mobility overview
+      responses: { "200": { description: Zone count, OD count, hotspots, and strongest flows }, "503": { description: Mobility serving unavailable } }
+  /mobility/slots:
+    get:
+      summary: Eligible relative-mobility prediction slots
+      responses: { "200": { description: Successful or partial 30-minute model slots }, "503": { description: Mobility serving unavailable } }
+  /mobility/model-runs:
+    get:
+      summary: Bounded relative-mobility model-run list
+      responses: { "200": { description: Model runs with source identity and coverage }, "503": { description: Mobility serving unavailable } }
+  /mobility/model-runs/{runId}:
+    get:
+      summary: Model-run detail production gate
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: integer } }
+      responses: { "503": { description: FEATURE_NOT_READY until an operations read contract is approved } }
+  /mobility/zones:
+    get:
+      summary: Feature-gated relative mobility zone GeoJSON
+      parameters: [{ $ref: "#/components/parameters/Bbox" }, { $ref: "#/components/parameters/At" }]
+      responses: { "200": { description: Zone FeatureCollection with prediction metadata }, "503": { description: Mobility serving unavailable } }
+  /mobility/zones/{zoneId}:
+    get:
+      summary: One zone with strongest origins and destinations
+      parameters:
+        - { name: zoneId, in: path, required: true, schema: { type: integer } }
+        - { $ref: "#/components/parameters/At" }
+      responses: { "200": { description: Zone and directional flow summary }, "404": { description: Zone not found }, "503": { description: Mobility serving unavailable } }
+  /mobility/zones/{zoneId}/origins:
+    get:
+      summary: Strongest predicted origins for one zone
+      parameters:
+        - { name: zoneId, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Directional predicted origin flows }, "503": { description: Mobility serving unavailable } }
+  /mobility/zones/{zoneId}/destinations:
+    get:
+      summary: Strongest predicted destinations for one zone
+      parameters:
+        - { name: zoneId, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Directional predicted destination flows }, "503": { description: Mobility serving unavailable } }
+  /mobility/zones/{zoneId}/history:
+    get:
+      summary: Feature-gated prediction history for one zone
+      parameters:
+        - { name: zoneId, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Relative prediction history }, "503": { description: Mobility serving unavailable } }
+  /mobility/flows:
+    get:
+      summary: Feature-gated directional relative-mobility Flow GeoJSON
+      parameters: [{ $ref: "#/components/parameters/Bbox" }, { $ref: "#/components/parameters/At" }]
+      responses: { "200": { description: Directional OD FeatureCollection }, "503": { description: Mobility serving unavailable } }
+  /mobility/centers:
+    get:
+      summary: Source-derived places and activity centers
+      responses: { "200": { description: Bounded places context with import identity and ETag }, "304": { description: Places response unchanged }, "503": { description: Places layer unavailable } }
+  /mobility/display-grid:
+    get:
+      summary: Source-derived places display grid
+      responses: { "200": { description: Stored grid cells for contextual display only }, "503": { description: Places layer unavailable } }
+  /mobility/catchments/overview:
+    get:
+      summary: Gravity-here-v2 public catchment overview
+      responses: { "200": { description: 22 displayed catchments, 21 modeled zones, and 420 directed pairs }, "404": { description: Public rollout flag disabled }, "503": { description: Database public-serving contract unavailable } }
+  /mobility/catchments/zones:
+    get:
+      summary: Gravity-here-v2 public catchment GeoJSON
+      responses: { "200": { description: 22 polygons with 21 modeled predictions and one display-only polygon }, "404": { description: Public rollout flag disabled }, "503": { description: Database public-serving contract unavailable } }
+  /mobility/catchments/flows:
+    get:
+      summary: Gravity-here-v2 directional catchment flows
+      parameters:
+        - { name: origin, in: query, schema: { type: string } }
+        - { name: destination, in: query, schema: { type: string } }
+        - { name: minScore, in: query, schema: { type: number, minimum: 0, maximum: 100, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 420, default: 420 } }
+      responses: { "200": { description: Authoritative directed OD records; full request returns 420 pairs }, "404": { description: Public rollout flag disabled }, "503": { description: Database public-serving contract unavailable } }
+  /mobility/catchments/centers:
+    get:
+      summary: Aggregated activity-center context for v2 catchments
+      parameters:
+        - { name: category, in: query, schema: { type: string } }
+      responses: { "200": { description: Aggregated center summaries for modeled catchments }, "404": { description: Public rollout flag disabled }, "503": { description: Database public-serving contract unavailable } }
+  /export/flow.csv:
+    get:
+      summary: Export measured Flow as CSV
+      responses: { "200": { description: CSV download }, "503": { description: Flow source unavailable } }
+  /export/flow.geojson:
+    get:
+      summary: Export measured Flow as GeoJSON
+      responses: { "200": { description: GeoJSON download }, "503": { description: Flow source unavailable } }
+  /export/routes.csv:
+    get:
+      summary: Export airport-tourism route conditions as CSV
+      responses: { "200": { description: CSV download }, "503": { description: Route source unavailable } }
+  /export/mobility-flows.csv:
+    get:
+      summary: Export feature-gated relative mobility flows as CSV
+      responses: { "200": { description: CSV download }, "503": { description: Mobility serving unavailable } }
+  /export/mobility-zones.geojson:
+    get:
+      summary: Export feature-gated relative mobility zones as GeoJSON
+      responses: { "200": { description: GeoJSON download }, "503": { description: Mobility serving unavailable } }
+  /operations/collectors:
+    get:
+      summary: Protected current Flow and Route collector alert states
+      security: [{ operationsBearer: [] }]
+      responses: { "200": { description: Exactly one current state per source }, "401": { description: Missing credentials }, "403": { description: Insufficient role } }
+  /operations/collectors/flow/runs:
+    get:
+      summary: Protected bounded Flow collector run history
+      security: [{ operationsBearer: [] }]
+      responses: { "200": { description: Redacted api_flow_run_history_v1 rows }, "401": { description: Missing credentials }, "403": { description: Insufficient role } }
+  /operations/collectors/routes/runs:
+    get:
+      summary: Protected bounded Route collector run history
+      security: [{ operationsBearer: [] }]
+      responses: { "200": { description: Redacted api_route_run_history_v1 rows }, "401": { description: Missing credentials }, "403": { description: Insufficient role } }
+  /ops/flow-runs:
+    get:
+      deprecated: true
+      summary: Legacy protected Flow run history
+      security: [{ operationsBearer: [] }]
+      responses: { "200": { description: Flow runs } }
+  /ops/flow-runs/{id}:
+    get:
+      deprecated: true
+      summary: Legacy protected Flow run detail
+      security: [{ operationsBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Redacted Flow run }, "404": { description: Run not found } }
+  /ops/hourly-runs:
+    get:
+      deprecated: true
+      summary: Legacy protected Route run history
+      security: [{ operationsBearer: [] }]
+      responses: { "200": { description: Route runs } }
+  /ops/hourly-runs/{id}:
+    get:
+      deprecated: true
+      summary: Legacy protected Route run detail
+      security: [{ operationsBearer: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses: { "200": { description: Redacted Route run }, "404": { description: Run not found } }
+  /ops/source-contract:
+    get:
+      summary: Read-only production schema contract checks
+      security: [{ operationsBearer: [] }]
+      responses: { "200": { description: Source ready }, "503": { description: Contract failed } }
+  /incidents/map:
+    get:
+      summary: Historical data retained but product feature disabled
+      responses: { "503": { description: FEATURE_NOT_READY } }
+  /incidents/history:
+    get:
+      summary: Historical data retained but product feature disabled
+      responses: { "503": { description: FEATURE_NOT_READY } }
+  /analytics/coverage:
+    get:
+      summary: Unsupported analytics production gate
+      responses: { "503": { description: FEATURE_NOT_READY } }
+  /analytics/hotspots:
+    get:
+      summary: Unsupported analytics production gate
+      responses: { "503": { description: FEATURE_NOT_READY } }
+  /analytics/zones/{zoneId}:
+    get:
+      summary: Unsupported analytics production gate
+      parameters:
+        - { name: zoneId, in: path, required: true, schema: { type: integer } }
+      responses: { "503": { description: FEATURE_NOT_READY } }
