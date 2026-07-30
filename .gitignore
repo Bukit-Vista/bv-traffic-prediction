@@ -1,7 +1,7 @@
 .next
 .next-dev
 node_modules
-data
+/data
 coverage
 test-results
 playwright-report
