@@ -18,7 +18,7 @@ services:
       target: web-runtime
     command: ["node", "server.js"]
     ports:
-      - "127.0.0.1:${APP_PORT:-3000}:3000"
+      - "3000:3000"
     restart: unless-stopped
 
   snapshot-builder:

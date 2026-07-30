@@ -27,6 +27,8 @@ services:
       REDIS_CACHE_REQUIRED: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ports:
+      - "3000:3000"
     depends_on:
       redis:
         condition: service_healthy
