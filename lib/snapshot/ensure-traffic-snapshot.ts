@@ -3,6 +3,7 @@ import type { SourceDashboardData } from "@/lib/dashboard/types";
 import { buildTrafficSnapshot } from "@/lib/snapshot/build-traffic-snapshot";
 import {
   readCurrentDashboardSnapshot,
+  trafficSnapshotReadiness,
   trafficSnapshotMode,
   trafficSnapshotPointerKey,
   type TrafficSnapshotEnv
@@ -30,7 +31,13 @@ export async function ensureLatestTrafficSnapshot(
   if (trafficSnapshotMode(env) === "off") return null;
 
   const current = await readCurrentDashboardSnapshot(env, suppliedStore);
-  if (current && snapshotMatchesDashboard(current, dashboard)) return current;
+  if (
+    current &&
+    snapshotMatchesDashboard(current, dashboard) &&
+    (await trafficSnapshotReadiness(env, suppliedStore)).status === "ok"
+  ) {
+    return current;
+  }
 
   const identity = trafficSnapshotPointerKey(env);
   const inFlight = inFlightBuilds.get(identity);
@@ -38,7 +45,13 @@ export async function ensureLatestTrafficSnapshot(
 
   const build = Promise.resolve().then(async () => {
     const refreshed = await readCurrentDashboardSnapshot(env, suppliedStore);
-    if (refreshed && snapshotMatchesDashboard(refreshed, dashboard)) return refreshed;
+    if (
+      refreshed &&
+      snapshotMatchesDashboard(refreshed, dashboard) &&
+      (await trafficSnapshotReadiness(env, suppliedStore)).status === "ok"
+    ) {
+      return refreshed;
+    }
 
     await buildTrafficSnapshot(dashboard, { env, store: suppliedStore });
     const materialized = await readCurrentDashboardSnapshot(env, suppliedStore);

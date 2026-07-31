@@ -17,12 +17,16 @@ import { DEFAULT_BALI_BBOX } from "@/lib/map/viewport";
 import { calculateTrafficOverviewForCollection } from "@/lib/map/viewport-traffic";
 import {
   encodeDashboardSnapshot,
+  readTrafficSnapshotManifest,
+  readTrafficSnapshotPointer,
   TRAFFIC_SNAPSHOT_SCHEMA_VERSION,
   trafficSnapshotConfig,
   trafficSnapshotDashboardKey,
+  trafficSnapshotManifestKey,
   trafficSnapshotPointerKey,
   trafficSnapshotTileKey,
   type TrafficSnapshotEnv,
+  type TrafficSnapshotManifest,
   type TrafficSnapshotPointer
 } from "@/lib/snapshot/traffic-snapshot";
 
@@ -124,12 +128,34 @@ function trafficOverviewByConfidence(dashboard: SourceDashboardData) {
 
 async function writeBatches(
   store: RedisCacheStore,
-  entries: TileEntry[],
-  ttlSeconds: number
+  entries: TileEntry[]
 ) {
   for (let index = 0; index < entries.length; index += WRITE_BATCH_SIZE) {
     const batch = entries.slice(index, index + WRITE_BATCH_SIZE);
-    await Promise.all(batch.map((entry) => store.set(entry.key, entry.encoded, { EX: ttlSeconds })));
+    await Promise.all(batch.map((entry) => store.set(entry.key, entry.encoded)));
+  }
+}
+
+async function retirePreviousSnapshot(
+  store: RedisCacheStore,
+  previous: TrafficSnapshotPointer | null,
+  currentVersion: string,
+  env: TrafficSnapshotEnv,
+  ttlSeconds: number
+) {
+  if (!previous || previous.version === currentVersion || !store.expire) return;
+  const manifest = await readTrafficSnapshotManifest(previous, env, store)
+    .catch(() => null);
+  const keys = [
+    trafficSnapshotDashboardKey(previous.version, env),
+    trafficSnapshotManifestKey(previous.version, env),
+    ...(manifest?.tileKeys ?? [])
+  ];
+  for (let index = 0; index < keys.length; index += WRITE_BATCH_SIZE) {
+    await Promise.all(
+      keys.slice(index, index + WRITE_BATCH_SIZE)
+        .map((key) => store.expire!(key, ttlSeconds))
+    );
   }
 }
 
@@ -147,6 +173,7 @@ export async function buildTrafficSnapshot(
   const config = trafficSnapshotConfig(env);
   const store = options.store ?? await getRedisCacheStore(env);
   if (!store) throw new Error("Redis is required to build the traffic cache.");
+  const previousPointer = await readTrafficSnapshotPointer(env, store);
 
   const minZoom = options.minZoom ?? MIN_ZOOM;
   const maxZoom = options.maxZoom ?? MAX_ZOOM;
@@ -238,19 +265,38 @@ export async function buildTrafficSnapshot(
     tileCount: tileEntries.length,
     versions: dashboard.versions!
   };
+  const manifest: TrafficSnapshotManifest = {
+    schemaVersion: TRAFFIC_SNAPSHOT_SCHEMA_VERSION,
+    version,
+    dashboardKey: trafficSnapshotDashboardKey(version, env),
+    tileKeys: tileEntries.map((entry) => entry.key)
+  };
 
-  // Versioned values are written first. Publishing the pointer last makes
-  // activation atomic from readers' perspective.
-  await writeBatches(store, tileEntries, config.ttlSeconds);
+  // The active version is persistent: manual-only production must retain the
+  // last-known-good snapshot until a replacement is published. Versioned
+  // values and the manifest are written first; publishing the pointer last
+  // makes activation atomic from readers' perspective.
+  await writeBatches(store, tileEntries);
   await store.set(
     trafficSnapshotDashboardKey(version, env),
-    encodedDashboard,
-    { EX: config.ttlSeconds }
+    encodedDashboard
+  );
+  await store.set(
+    trafficSnapshotManifestKey(version, env),
+    JSON.stringify(manifest)
   );
   await store.set(
     trafficSnapshotPointerKey(env),
-    JSON.stringify(pointer),
-    { EX: config.ttlSeconds }
+    JSON.stringify(pointer)
   );
+  // Cleanup is deliberately after activation. A cleanup failure can leave old
+  // cache entries, but it cannot make the newly published version unavailable.
+  await retirePreviousSnapshot(
+    store,
+    previousPointer,
+    version,
+    env,
+    config.ttlSeconds
+  ).catch(() => undefined);
   return pointer;
 }

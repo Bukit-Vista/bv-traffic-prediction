@@ -9,6 +9,8 @@ import {
   readCurrentDashboardSnapshot,
   readTrafficSnapshotPointer,
   readTrafficVectorTile,
+  trafficSnapshotManifestKey,
+  trafficSnapshotReadiness,
   trafficSnapshotPointerKey
 } from "@/lib/snapshot/traffic-snapshot";
 
@@ -23,18 +25,23 @@ function tileY(latitude: number, zoom: number) {
 
 function memoryStore() {
   const values = new Map<string, string>();
-  const writes: Array<{ key: string; value: string; ttl: number }> = [];
+  const writes: Array<{ key: string; value: string; ttl: number | null }> = [];
+  const expirations: Array<{ key: string; ttl: number }> = [];
   const store: RedisCacheStore = {
     get: vi.fn(async (key: string) => values.get(key) ?? null),
-    set: vi.fn(async (key: string, value: string, options: { EX: number }) => {
+    set: vi.fn(async (key: string, value: string, options?: { EX?: number }) => {
       values.set(key, value);
-      writes.push({ key, value, ttl: options.EX });
+      writes.push({ key, value, ttl: options?.EX ?? null });
       return "OK";
     }),
     del: vi.fn(async (key: string) => values.delete(key)),
+    expire: vi.fn(async (key: string, ttl: number) => {
+      expirations.push({ key, ttl });
+      return values.has(key) ? 1 : 0;
+    }),
     ping: vi.fn(async () => "PONG")
   };
-  return { store, values, writes };
+  return { store, values, writes, expirations };
 }
 
 function cacheEnv() {
@@ -108,7 +115,7 @@ function dashboard(): SourceDashboardData {
 
 describe("immutable Redis traffic cache", () => {
   it("builds, atomically activates, reads, and serves a compressed vector tile", async () => {
-    const { store, writes } = memoryStore();
+    const { store, values, writes } = memoryStore();
     const env = cacheEnv();
     const pointer = await buildTrafficSnapshot(dashboard(), {
       env,
@@ -122,7 +129,13 @@ describe("immutable Redis traffic cache", () => {
     expect(activePointer?.version).toBe(pointer.version);
     expect(activePointer?.versions).toEqual(dashboard().versions);
     expect(writes.at(-1)?.key).toBe(trafficSnapshotPointerKey(env));
-    expect(writes.every((write) => write.ttl === 3600)).toBe(true);
+    expect(writes.every((write) => write.ttl == null)).toBe(true);
+    expect(values.has(trafficSnapshotManifestKey(pointer.version, env))).toBe(true);
+    expect(await trafficSnapshotReadiness(env, store)).toMatchObject({
+      status: "ok",
+      reason: "ready",
+      version: pointer.version
+    });
 
     const restored = await readCurrentDashboardSnapshot(env, store);
     expect(restored?.meta.sourceRunId).toBe("91");
@@ -161,8 +174,8 @@ describe("immutable Redis traffic cache", () => {
       .toBe(first?.trafficTiles?.version);
   });
 
-  it("keeps versioned values while publishing a new current pointer", async () => {
-    const { store, values } = memoryStore();
+  it("keeps the active version persistent and retires the replaced version", async () => {
+    const { store, values, expirations } = memoryStore();
     const env = cacheEnv();
     const first = await buildTrafficSnapshot(dashboard(), { env, store, minZoom: 7, maxZoom: 7 });
     const firstKeys = [...values.keys()].filter((key) => key.includes(first.version));
@@ -181,6 +194,57 @@ describe("immutable Redis traffic cache", () => {
 
     expect(latest.version).not.toBe(first.version);
     expect(firstKeys.every((key) => values.has(key))).toBe(true);
+    expect(firstKeys.every((key) =>
+      expirations.some((expiration) => expiration.key === key && expiration.ttl === 3600)
+    )).toBe(true);
+    expect(expirations.some((expiration) =>
+      expiration.key === trafficSnapshotManifestKey(first.version, env)
+    )).toBe(true);
     expect((await readTrafficSnapshotPointer(env, store))?.version).toBe(latest.version);
+    expect(await trafficSnapshotReadiness(env, store)).toMatchObject({
+      status: "ok",
+      version: latest.version
+    });
+  });
+
+  it("reports an incomplete active version as unavailable", async () => {
+    const { store, values } = memoryStore();
+    const env = cacheEnv();
+    const pointer = await buildTrafficSnapshot(dashboard(), {
+      env,
+      store,
+      minZoom: 7,
+      maxZoom: 7
+    });
+    values.delete(trafficSnapshotManifestKey(pointer.version, env));
+    expect(await trafficSnapshotReadiness(env, store)).toEqual({
+      status: "unavailable",
+      reason: "manifest_missing",
+      version: pointer.version,
+      createdAtUtc: pointer.createdAtUtc
+    });
+  });
+
+  it("rebuilds a matching legacy snapshot into the persistent manifest format", async () => {
+    const { store, values, writes } = memoryStore();
+    const env = cacheEnv();
+    const pointer = await buildTrafficSnapshot(dashboard(), {
+      env,
+      store,
+      minZoom: 7,
+      maxZoom: 7
+    });
+    values.delete(trafficSnapshotManifestKey(pointer.version, env));
+    const writesBeforeRepair = writes.length;
+
+    const repaired = await ensureLatestTrafficSnapshot(dashboard(), env, store);
+
+    expect(repaired?.trafficTiles?.version).toBe(pointer.version);
+    expect(writes.length).toBeGreaterThan(writesBeforeRepair);
+    expect(await trafficSnapshotReadiness(env, store)).toMatchObject({
+      status: "ok",
+      reason: "ready",
+      version: pointer.version
+    });
   });
 });
