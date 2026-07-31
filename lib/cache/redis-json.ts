@@ -25,7 +25,7 @@ export type RedisCacheEnv = {
 
 export type RedisCacheStore = {
   get(key: string): Promise<string | null>;
-  set(key: string, value: string, options: { EX: number }): Promise<unknown>;
+  set(key: string, value: string, options: { EX: number; NX?: true }): Promise<unknown>;
   del(key: string): Promise<unknown>;
   ping(): Promise<string>;
 };
@@ -46,6 +46,7 @@ export type RedisJsonCacheOptions = {
 let singletonClient: RedisClientType | null = null;
 let connectingClient: Promise<RedisClientType> | null = null;
 let lastWarningAt = 0;
+const inFlightLoads = new Map<string, Promise<unknown>>();
 
 function boundedInteger(
   value: string | undefined,
@@ -216,25 +217,36 @@ export async function withRedisJsonCache<T>(
     warnCacheFailure("read", error);
   }
 
-  const value = await loader();
-  if (!store) return value;
+  const existingLoad = inFlightLoads.get(key);
+  if (existingLoad) return existingLoad as Promise<T>;
 
-  try {
-    const encoded = encodeCacheValue(value, config.maxValueBytes);
-    if (encoded && encoded.byteLength <= config.maxValueBytes) {
-      const ttlSeconds = options.ttlSeconds ?? (
-        options.freshness === "historical"
-          ? config.historicalTtlSeconds
-          : config.latestTtlSeconds
-      );
-      await store.set(key, encoded.encoded, {
-        EX: boundedInteger(String(ttlSeconds), config.latestTtlSeconds, 1, 7 * 86_400)
-      });
+  const load = (async () => {
+    const value = await loader();
+    if (!store) return value;
+
+    try {
+      const encoded = encodeCacheValue(value, config.maxValueBytes);
+      if (encoded && encoded.byteLength <= config.maxValueBytes) {
+        const ttlSeconds = options.ttlSeconds ?? (
+          options.freshness === "historical"
+            ? config.historicalTtlSeconds
+            : config.latestTtlSeconds
+        );
+        await store.set(key, encoded.encoded, {
+          EX: boundedInteger(String(ttlSeconds), config.latestTtlSeconds, 1, 7 * 86_400)
+        });
+      }
+    } catch (error) {
+      warnCacheFailure("write", error);
     }
-  } catch (error) {
-    warnCacheFailure("write", error);
+    return value;
+  })();
+  inFlightLoads.set(key, load);
+  try {
+    return await load;
+  } finally {
+    if (inFlightLoads.get(key) === load) inFlightLoads.delete(key);
   }
-  return value;
 }
 
 export async function redisCacheHealth(env: RedisCacheEnv = process.env) {

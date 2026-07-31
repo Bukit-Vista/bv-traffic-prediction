@@ -5,6 +5,7 @@ import { idSchema, mvpWindowQuerySchema, parseQuery } from "@/lib/api/validation
 import { AIRPORT_CORRIDOR_DISCLAIMER } from "@/lib/routes/airport-corridors";
 import { enforceRateLimit } from "@/lib/api/access-control";
 import { coverageForSlots, expectedSlots, resolveMvpUtcWindow } from "@/lib/api/mvp-window";
+import { withRedisJsonCache } from "@/lib/cache/redis-json";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +16,15 @@ export async function GET(request: Request, context: { params: Promise<{ routeId
     const routeId = idSchema.parse((await context.params).routeId);
     const parsed = parseQuery(mvpWindowQuerySchema, request);
     const window = resolveMvpUtcWindow(parsed);
-    const result = await getRouteHistory(routeId, { from: window.startUtc, to: window.endExclusiveUtc, limit: window.windowHours });
+    const result = await withRedisJsonCache({
+      resource: "route-history",
+      identity: { routeId, window },
+      freshness: parsed.from && parsed.to ? "historical" : "latest"
+    }, () => getRouteHistory(routeId, {
+      from: window.startUtc,
+      to: window.endExclusiveUtc,
+      limit: window.windowHours
+    }));
     const points = result.points;
     const expected = expectedSlots(window, 60);
     const coverage = coverageForSlots(expected, points.map((point) => point.collectionSlotUtc));

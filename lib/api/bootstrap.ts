@@ -2,7 +2,6 @@ import { getDashboardVersionIdentities, getFlowMap, getFlowSlots, getMvpWindowSt
 import { getCollectorAlertStates } from "@/lib/api/database-serving-contract";
 import { createResourceEtag } from "@/lib/api/conditional-cache";
 import { makeMeta } from "@/lib/api/core";
-import { validateSourceContractOnce } from "@/lib/api/source-contract";
 import { useDemoSource } from "@/lib/api/demo-source";
 import type { CollectionRun, CollectorState, RouteSummary, SourceDashboardData } from "@/lib/dashboard/types";
 import { calculateTrafficOverviewForCollection } from "@/lib/map/viewport-traffic";
@@ -114,7 +113,6 @@ export async function getMySqlSourceDashboardData(): Promise<SourceDashboardData
   }
   // This call enforces the production prohibition even though this bootstrap never substitutes fixtures.
   useDemoSource();
-  await validateSourceContractOnce();
   const input = { bbox: DEFAULT_BALI_BBOX, at: "latest", limit: 5000, minConfidence: 0 };
   const window = completedUtcHourWindow();
   const [flow, routes, slots, sourceStates, versionIdentities, windowStatus] = await Promise.all([
@@ -147,33 +145,38 @@ export async function getMySqlSourceDashboardData(): Promise<SourceDashboardData
   };
 }
 
-export async function getSourceDashboardData(): Promise<SourceDashboardData> {
-  const snapshot = await readCurrentDashboardSnapshot();
+export function dashboardLiveFallbackEnabled(env: NodeJS.ProcessEnv = process.env) {
+  return env.NODE_ENV !== "production";
+}
+
+type DashboardSourceDependencies = {
+  env?: NodeJS.ProcessEnv;
+  readSnapshot?: typeof readCurrentDashboardSnapshot;
+  loadLive?: typeof getMySqlSourceDashboardData;
+  materialize?: typeof ensureLatestTrafficSnapshot;
+};
+
+export async function getSourceDashboardData(
+  dependencies: DashboardSourceDependencies = {}
+): Promise<SourceDashboardData> {
+  const readSnapshot = dependencies.readSnapshot ?? readCurrentDashboardSnapshot;
+  const snapshot = await readSnapshot();
+  if (snapshot) return snapshot;
+
+  const env = dependencies.env ?? process.env;
+  if (!dashboardLiveFallbackEnabled(env)) {
+    throw new Error(
+      "The published Redis dashboard snapshot is unavailable. An authorized manual refresh is required."
+    );
+  }
+
+  const loadLive = dependencies.loadLive ?? getMySqlSourceDashboardData;
+  const live = await loadLive();
   try {
-    const live = await getMySqlSourceDashboardData();
-    if (snapshot && dashboardCacheMatches(live, snapshot)) return snapshot;
-    try {
-      const materialized = await ensureLatestTrafficSnapshot(live);
-      if (materialized && dashboardCacheMatches(live, materialized)) return materialized;
-    } catch {
-      // Keep the live MySQL response available if local snapshot materialization fails.
-    }
-    if (snapshot?.trafficTiles && live.meta.sourceRunId === snapshot.meta.sourceRunId && live.meta.slotUtc === snapshot.meta.slotUtc) {
-      return { ...live, trafficTiles: snapshot.trafficTiles };
-    }
+    const materialize = dependencies.materialize ?? ensureLatestTrafficSnapshot;
+    return await materialize(live) ?? live;
+  } catch {
     return live;
-  } catch (error) {
-    if (!snapshot) throw error;
-    return {
-      ...snapshot,
-      meta: makeMeta({
-        ...snapshot.meta,
-        status: "stale",
-        stale: true,
-        source: "here_snapshot_redis_fallback",
-        disclaimer: "The live MySQL refresh failed. The previous validated snapshot is retained and explicitly marked stale."
-      })
-    };
   }
 }
 

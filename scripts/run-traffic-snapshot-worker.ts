@@ -4,13 +4,15 @@ import { closeRedisCache } from "@/lib/cache/redis-json";
 import { closeMySqlPool } from "@/lib/db/mysql";
 import { buildTrafficSnapshot } from "@/lib/snapshot/build-traffic-snapshot";
 import { prewarmMobilityCache } from "@/lib/snapshot/prewarm-mobility-cache";
-import { nextAlignedRefreshDelayMs } from "@/lib/snapshot/refresh-schedule";
+import {
+  nextAlignedRefreshDelayMs,
+  nextSnapshotFailureDelayMs
+} from "@/lib/snapshot/refresh-schedule";
 
 const DEFAULT_INTERVAL_MINUTES = 30;
 const DEFAULT_OFFSET_MINUTES = 12;
 const MINIMUM_INTERVAL_MINUTES = 5;
 const MAXIMUM_INTERVAL_MINUTES = 24 * 60;
-const FAILURE_RETRY_MS = 60_000;
 
 let stopping = false;
 let wake: (() => void) | null = null;
@@ -101,7 +103,6 @@ async function refreshOnce() {
 async function main() {
   const interval = intervalMinutes();
   const offset = offsetMinutes(interval);
-  const intervalMs = interval * 60_000;
   process.stdout.write(`${JSON.stringify({
     event: "traffic_snapshot_worker_started",
     timestamp: new Date().toISOString(),
@@ -109,25 +110,27 @@ async function main() {
     offsetMinutes: offset
   })}\n`);
 
+  let consecutiveFailures = 0;
   while (!stopping) {
     const startedAt = Date.now();
-    let succeeded = false;
+    let nextDelayMs: number;
     try {
       await refreshOnce();
-      succeeded = true;
+      consecutiveFailures = 0;
+      nextDelayMs = nextAlignedRefreshDelayMs(Date.now(), interval, offset);
     } catch (error) {
+      consecutiveFailures += 1;
+      nextDelayMs = nextSnapshotFailureDelayMs(consecutiveFailures, interval);
       process.stderr.write(`${JSON.stringify({
         event: "traffic_snapshot_refresh_failed",
         timestamp: new Date().toISOString(),
         durationMs: Date.now() - startedAt,
-        retryInSeconds: Math.min(intervalMs, FAILURE_RETRY_MS) / 1000,
+        consecutiveFailures,
+        retryInSeconds: nextDelayMs / 1000,
         error: error instanceof Error ? error.message : String(error)
       })}\n`);
     }
     if (stopping) break;
-    const nextDelayMs = succeeded
-      ? nextAlignedRefreshDelayMs(Date.now(), interval, offset)
-      : Math.min(intervalMs, FAILURE_RETRY_MS);
     await wait(nextDelayMs);
   }
 }

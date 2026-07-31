@@ -6,7 +6,13 @@ import {
   parseJson,
   toIsoUtc
 } from "@/lib/db/mappers";
-import { getMySqlConfig, getMySqlRuntimeConfig, hasMutationPrivileges, toMysqlDateTime } from "@/lib/db/mysql";
+import {
+  getMySqlConfig,
+  getMySqlRuntimeConfig,
+  hasMutationPrivileges,
+  toMysqlDateTime,
+  withMaxExecutionTime
+} from "@/lib/db/mysql";
 
 describe("mysql config and mappers", () => {
   it("requires MySQL configuration", () => {
@@ -32,10 +38,27 @@ describe("mysql config and mappers", () => {
   });
 
   it("bounds the read pool and per-query timeout", () => {
-    expect(getMySqlRuntimeConfig({})).toEqual({ connectionLimit: 6, queryTimeoutMs: 15000 });
-    expect(getMySqlRuntimeConfig({ MYSQL_CONNECTION_LIMIT: "200", MYSQL_QUERY_TIMEOUT_MS: "90000" })).toEqual({
-      connectionLimit: 6, queryTimeoutMs: 15000
+    expect(getMySqlRuntimeConfig({})).toEqual({
+      connectionLimit: 2,
+      queueLimit: 20,
+      queryTimeoutMs: 15000,
+      statementTimeoutMs: 14000
     });
+    expect(getMySqlRuntimeConfig({ MYSQL_CONNECTION_LIMIT: "200", MYSQL_QUERY_TIMEOUT_MS: "90000" })).toEqual({
+      connectionLimit: 2,
+      queueLimit: 20,
+      queryTimeoutMs: 15000,
+      statementTimeoutMs: 14000
+    });
+  });
+
+  it("adds a server-side execution limit to read statements", () => {
+    expect(withMaxExecutionTime("SELECT 1", 14_000)).toBe(
+      "SELECT /*+ MAX_EXECUTION_TIME(14000) */ 1"
+    );
+    expect(withMaxExecutionTime(" UPDATE routes SET active = 0", 14_000)).toBe(
+      " UPDATE routes SET active = 0"
+    );
   });
 
   it("detects write-capable grants without retaining grant details", () => {

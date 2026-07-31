@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  dashboardLiveFallbackEnabled,
   dashboardCacheMatches,
   dashboardResourceVersions,
   dashboardSnapshotMatches,
   dashboardVersionsMatch,
-  flowSnapshotMatches
+  flowSnapshotMatches,
+  getSourceDashboardData
 } from "@/lib/api/bootstrap";
+import { vi } from "vitest";
 
 const identities = {
   flow: { id: 67, slotUtc: "2026-07-17T01:00:00.000Z", status: "success", stale: false },
@@ -74,5 +77,24 @@ describe("dashboard bootstrap cache alignment", () => {
     expect(dashboardVersionsMatch(versions, { ...versions, routes: "changed" })).toBe(false);
     expect(dashboardCacheMatches(live as never, cached as never)).toBe(true);
     expect(dashboardCacheMatches({ ...live, meta: { ...live.meta, sourceRunId: "68" } } as never, cached as never)).toBe(false);
+  });
+
+  it("serves a published snapshot without touching live MySQL", async () => {
+    const loadLive = vi.fn();
+    await expect(getSourceDashboardData({
+      env: { NODE_ENV: "production" },
+      readSnapshot: async () => snapshot as never,
+      loadLive
+    })).resolves.toBe(snapshot);
+    expect(loadLive).not.toHaveBeenCalled();
+  });
+
+  it("requires a manual refresh when production has no published snapshot", async () => {
+    expect(dashboardLiveFallbackEnabled({ NODE_ENV: "production" })).toBe(false);
+    await expect(getSourceDashboardData({
+      env: { NODE_ENV: "production" },
+      readSnapshot: async () => null,
+      loadLive: vi.fn()
+    })).rejects.toThrow("authorized manual refresh");
   });
 });

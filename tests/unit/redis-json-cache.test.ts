@@ -54,6 +54,30 @@ describe("Redis JSON cache", () => {
     expect(store.set).toHaveBeenCalledWith(expect.any(String), expect.stringMatching(/^gz1:/), { EX: 86_400 });
   });
 
+  it("coalesces concurrent cache misses in one process", async () => {
+    const store = memoryStore();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const loader = vi.fn(async () => {
+      await blocked;
+      return { ok: true };
+    });
+    const dependencies = { env: cacheEnv(), store };
+    const options = { resource: "single-flight", identity: "current" };
+
+    const first = withRedisJsonCache(options, loader, dependencies);
+    const second = withRedisJsonCache(options, loader, dependencies);
+    release();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true },
+      { ok: true }
+    ]);
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
   it("skips values above the compressed per-entry limit", async () => {
     const store = memoryStore();
     const randomPayload = Array.from({ length: 10_000 }, (_, index) =>

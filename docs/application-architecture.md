@@ -156,25 +156,25 @@ The web process can read both Redis and MySQL. MySQL access is restricted to a
 SELECT-only account, and production startup rejects an account with mutation
 privileges.
 
-### 5.2 Snapshot worker
+### 5.2 Optional snapshot worker
 
-The worker is a long-running Node.js process. By default it:
+The worker is an optional explicit-profile Node.js process. Production keeps it
+disabled by default because refreshes are manually authorized. When enabled it:
 
 1. runs immediately after startup;
 2. reads the latest valid dashboard state from MySQL;
-3. validates the source contract;
-4. creates compressed dashboard data and vector tiles;
-5. writes versioned values to Redis;
-6. publishes the current-version pointer last;
-7. prewarms enabled catchment caches;
-8. waits for the next aligned schedule.
+3. creates compressed dashboard data and vector tiles;
+4. writes versioned values to Redis;
+5. publishes the current-version pointer last;
+6. prewarms enabled catchment caches;
+7. waits for the next aligned schedule.
 
 The default schedule is every 30 minutes with a 12-minute offset, producing
 runs at `:12` and `:42`. The offset allows the upstream collector and model
 pipeline time to finish their writes.
 
-If a refresh fails, the worker logs structured JSON and retries after one
-minute. Builds do not overlap within one worker process.
+The default production deployment does not run this retry loop. The protected
+manual refresh uses a shared Redis cooldown lock and bounded MySQL concurrency.
 
 ### 5.3 One-shot snapshot builder
 
@@ -499,7 +499,7 @@ The Dockerfile produces two runtime targets:
 `docker-compose.yaml` defines:
 
 - `web`;
-- `snapshot-worker`;
+- explicit-profile `snapshot-worker`;
 - maintenance-profile `snapshot-builder`.
 
 `docker-compose.local.yaml` adds a local Redis instance configured with:
@@ -512,7 +512,7 @@ Production should replace the local Redis service with private
 Redis/ElastiCache and provide the RDS and cache endpoints through deployment
 configuration and a secrets manager.
 
-The web and worker should be deployed as separate services or task definitions
+The web and optional worker should be deployed as separate services or task definitions
 because they have independent lifecycle, scaling, and health requirements. Only
 one worker replica should run unless a distributed build lock is added.
 

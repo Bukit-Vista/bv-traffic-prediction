@@ -4,9 +4,9 @@ Status: current operations guidance. Last reviewed: 29 July 2026.
 
 ## Purpose
 
-Move dashboard read and rendering work out of the request path. The long-running
-worker automatically materializes the newest eligible HERE Flow and Route state
-and stores the reduced dashboard payload plus precomputed vector tiles in Redis.
+Move dashboard read and rendering work out of the request path. An authorized
+manual refresh materializes the newest eligible HERE Flow and Route state and
+stores the reduced dashboard payload plus precomputed vector tiles in Redis.
 The one-shot builder performs the same operation for initial creation or recovery.
 Requests read versioned Redis keys instead of executing MySQL spatial joins or
 generating heat points in the browser.
@@ -32,28 +32,32 @@ REDIS_CACHE_ENABLED=true
 REDIS_CACHE_REQUIRED=true
 REDIS_TRAFFIC_CACHE_MODE=prefer
 REDIS_TRAFFIC_SNAPSHOT_TTL_SECONDS=172800
-SNAPSHOT_REFRESH_INTERVAL_MINUTES=30
-SNAPSHOT_REFRESH_OFFSET_MINUTES=12
 REDIS_TRAFFIC_MAX_DASHBOARD_BYTES=8388608
 REDIS_TRAFFIC_MAX_TILE_BYTES=2097152
 REDIS_TRAFFIC_MAX_TOTAL_BYTES=335544320
 ```
 
 No local cache directory, persistent volume, or filesystem lock is required. The
-web, long-running worker, and one-shot builder containers must use the same Redis
+web and one-shot builder containers must use the same Redis
 endpoint and namespace.
 
-## Automatic scheduling
+## Manual production refresh
 
-The `snapshot-worker` runs immediately at startup, then aligns builds to `:12`
-and `:42` with the default 30-minute interval and 12-minute offset. It retries a
-failed build after one minute and prewarms enabled mobility caches after every
-successful traffic snapshot.
+The continuous `snapshot-worker` is outside the default Compose profile. This
+prevents a slow database statement from creating an automatic retry loop.
 
 Start the production-shaped local services with:
 
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.local.yaml up -d --build
+```
+
+Use the protected application endpoint for an operational refresh:
+
+```bash
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $OPERATIONS_API_TOKEN" \
+  https://traffic.example.com/api/v1/dashboard/refresh
 ```
 
 Use the one-shot builder for initial cache creation or recovery:
@@ -63,11 +67,10 @@ docker compose -f docker-compose.yaml -f docker-compose.local.yaml \
   --profile maintenance run --rm snapshot-builder
 ```
 
-An upstream automation workflow may also trigger the one-shot builder immediately
+An upstream automation workflow may trigger the one-shot builder immediately
 after an accepted collection. Deterministic versioned keys make repeated builds
 safe, and the current pointer is published only after the complete version is
-ready. Do not run multiple long-running worker replicas unless a distributed
-build lock is added.
+ready.
 
 ## Atomic activation and retention
 
@@ -86,14 +89,12 @@ A failed build never replaces the active pointer. Previous immutable versions st
 available until their TTL expires, allowing in-flight browsers to finish using an
 older tile URL.
 
-## Runtime modes
+## Production runtime behavior
 
-- `prefer` (default): use Redis when valid and fall back to live MySQL.
-- `require`: fail when the Redis traffic cache is unavailable or invalid.
-- `off`: bypass the Redis traffic cache and use MySQL directly.
-
-Use `require` only after the post-collection builder and Redis monitoring have been
-stable in staging.
+Production page rendering always requires a published snapshot. Public traffic
+cannot enable a live MySQL fallback through deployment configuration. The
+manual refresh cooldown is fixed at 120 seconds in application code, so no new
+production environment settings are required.
 
 ## Health verification
 

@@ -14,11 +14,11 @@ workloads. They do not run inside the public web container.
 | Area | Decision |
 | --- | --- |
 | Compute | One Amazon EC2 instance in the Jakarta region |
-| Packaging | Separate minimal Docker images for the Next.js web and snapshot worker |
+| Packaging | Separate minimal Docker images for the Next.js web and on-demand snapshot workloads |
 | Database | Existing Amazon RDS for MySQL; do not migrate to PostgreSQL |
 | Database access | Private network, TLS, and a SELECT-only web account |
 | Cache store | ElastiCache Redis OSS/Valkey for JSON, GeoJSON, dashboard state, and vector tiles |
-| Snapshot behavior | Long-running worker refreshes at `:12` and `:42`; one-shot and lazy builds remain recovery paths |
+| Snapshot behavior | Authorized manual refresh is the production default; the scheduled worker is an explicit opt-in profile |
 | Cache retention | Versioned traffic keys expire after 48 hours |
 | Reverse proxy | Caddy terminates TLS and proxies to the web container |
 | Redis | Private ElastiCache Redis OSS/Valkey for all shared application cache data |
@@ -43,8 +43,8 @@ Caddy on EC2 (TLS, compression, access logs)
 Docker: Next.js web container (one process, port 3000)
    |                  |
    |                  v
-   |             ElastiCache Redis/Valkey <--- Docker snapshot-worker
-   |             JSON + GeoJSON +              (runs at :12 and :42)
+   |             ElastiCache Redis/Valkey <--- authorized manual refresh
+   |             JSON + GeoJSON +              or one-shot builder
    |             dashboard + vector tiles               |
    v                                                     |
 Amazon RDS for MySQL (private endpoint, SELECT-only account) <---+
@@ -53,20 +53,20 @@ Collectors/model workers --> RDS MySQL
                          \--> optional immediate one-shot snapshot build
 ```
 
-One web container and one snapshot-worker container are intentional:
+One web container and an on-demand snapshot builder are intentional:
 
-- a missing or outdated Redis traffic version is materialized from the latest validated MySQL
-  dashboard data;
+- public page loads and browser refreshes never materialize a missing Redis
+  version from MySQL;
 - API rate limiting is held in process memory;
 - all shared cache values are stored in Redis;
 - one process keeps the remaining rate-limit state consistent;
 - MapLibre renders in the browser, so the server primarily handles SSR, JSON, and
   immutable vector-tile reads.
-- the worker builds and prewarms cache data independently of browser traffic.
+- an authorized manual operation builds cache data independently of browser
+  traffic and is protected by a shared Redis cooldown lock.
 
 Do not add a second web replica until the scale-out prerequisites in section 16
-are complete. Do not add a second worker replica without a distributed build
-lock.
+are complete.
 
 ## 3. Initial AWS sizing
 
@@ -92,8 +92,8 @@ requirements rather than user-count estimates alone.
 | Component | Responsibility | Required access |
 | --- | --- | --- |
 | Caddy | Public TLS, compression, security headers, access logs | Loopback web port |
-| Next.js web container | Dashboard, APIs, SSR, lazy Redis cache materialization, tiles | SELECT-only MySQL; Redis |
-| Snapshot-worker container | Automatic Redis snapshot creation and mobility-cache prewarming | SELECT-only MySQL; Redis |
+| Next.js web container | Dashboard, APIs, SSR, protected manual refresh, tiles | SELECT-only MySQL; Redis |
+| Snapshot-worker container | Optional scheduled Redis snapshot creation and mobility-cache prewarming | SELECT-only MySQL; Redis |
 | Snapshot-builder container | One-shot initial, post-collection, or recovery cache creation | SELECT-only MySQL; Redis |
 | ElastiCache Redis/Valkey | All shared compressed cache data and vector tiles | Application security group only |
 | RDS MySQL | Source observations, routes, model output, serving views | Writers plus restricted readers |
@@ -144,13 +144,15 @@ The Docker deployment must define these workloads:
 | --- | --- | --- |
 | `web` | `node server.js` | Long-running |
 | `snapshot-builder` | `node --import tsx scripts/build-traffic-snapshot.ts` | One-shot |
-| `snapshot-worker` | `node --import tsx scripts/run-traffic-snapshot-worker.ts` | Long-running |
+| `snapshot-worker` | `node --import tsx scripts/run-traffic-snapshot-worker.ts` | Optional explicit profile only |
 
 The web workload uses the minimal Next.js standalone image. Snapshot workloads use
 a separate worker image containing production dependencies and only the two
 snapshot entrypoints. All workloads share the environment contract, Redis endpoint,
 and Redis namespace. Publish container port `3000` only to `127.0.0.1:3000` on the
-host. Use `restart: unless-stopped` for the web and worker containers.
+host. Use `restart: unless-stopped` for the web container. Keep the automatic
+worker profile disabled unless an incident-reviewed schedule is intentionally
+restored.
 
 The production image must:
 
@@ -192,6 +194,10 @@ MYSQL_DATABASE=bali_traffic
 MYSQL_CONNECTION_LIMIT=6
 MYSQL_QUERY_TIMEOUT_MS=15000
 ```
+
+The application caps its read pool at two connections, its wait queue at 20,
+and its server statement timeout to one second below `MYSQL_QUERY_TIMEOUT_MS`.
+These safety limits do not require new deployment settings.
 
 Keep total connections below the RDS limit with at least 30% headroom:
 
@@ -277,9 +283,11 @@ so old keys are evicted under pressure. A 512 MiB node is a starting size, not
 Use `REDIS_TRAFFIC_CACHE_MODE=prefer` for the MVP:
 
 - a valid current Redis traffic version is used;
-- a missing or outdated cache version is built from the latest validated MySQL data;
-- concurrent lazy requests in the single Node.js process share one build;
-- if materialization fails, the live MySQL response remains available.
+- public page rendering and version polling use Redis only;
+- a missing snapshot returns an unavailable response instead of building from
+  public traffic;
+- an authorized refresh reads MySQL and publishes a complete version;
+- a shared Redis lock prevents concurrent refreshes across web processes.
 
 Set database-view requirement flags to `true` only after the corresponding views
 are deployed.
@@ -312,7 +320,7 @@ After those checks pass:
 2. Tag both with the same immutable commit SHA or release ID.
 3. Push them to Amazon ECR or the approved private registry.
 4. Update the EC2 deployment to the immutable image digests.
-5. Pull the images and recreate the web and snapshot-worker containers.
+5. Pull the images and recreate the web container.
 6. Leave the shared Redis cache online during container replacement.
 
 Do not build production images from an uncommitted EC2 working tree. Do not use a
@@ -402,7 +410,7 @@ Collect:
 
 - Caddy access logs and status codes;
 - Docker container logs, health, restarts, CPU, memory, and open files;
-- snapshot-worker heartbeat, last successful cycle, retries, and restart count;
+- authorized snapshot build age, duration, failures, and cooldown-lock state;
 - API latency by route;
 - MySQL pool wait time, query errors, and connection saturation;
 - Redis used memory, hit/miss rate, evictions, connection failures, and latency;
@@ -443,11 +451,11 @@ rebuild the current Redis traffic cache from MySQL.
 
 ## 15. Rollback
 
-Rollback changes the web and worker containers to the previous compatible
-immutable image digests:
+Rollback changes the web container to the previous compatible immutable image
+digest:
 
-1. Update both deployment image references to the previous release digests.
-2. Pull and recreate the web and snapshot-worker containers.
+1. Update the web deployment image reference to the previous release digest.
+2. Pull and recreate the web container.
 3. Do not flush Redis during the web rollback.
 4. Run the health and snapshot smoke tests.
 
