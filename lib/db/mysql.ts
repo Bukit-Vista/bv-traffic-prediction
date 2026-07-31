@@ -53,9 +53,17 @@ function boundedInteger(value: string | undefined, fallback: number, minimum: nu
 }
 
 export function getMySqlRuntimeConfig(env: MySqlEnv = process.env) {
+  const queryTimeoutMs = boundedInteger(env.MYSQL_QUERY_TIMEOUT_MS, 15_000, 1_000, 30_000);
   return {
-    connectionLimit: boundedInteger(env.MYSQL_CONNECTION_LIMIT, 6, 1, 20),
-    queryTimeoutMs: boundedInteger(env.MYSQL_QUERY_TIMEOUT_MS, 15_000, 1_000, 30_000)
+    // Keep the existing environment contract, but enforce the safe production
+    // ceiling in code so deployment configuration does not need to change.
+    connectionLimit: Math.min(
+      boundedInteger(env.MYSQL_CONNECTION_LIMIT, 6, 1, 20),
+      2
+    ),
+    queueLimit: 20,
+    queryTimeoutMs,
+    statementTimeoutMs: Math.max(1_000, queryTimeoutMs - 1_000)
   };
 }
 
@@ -104,9 +112,9 @@ function poolOptions(config: MySqlConfig, env: MySqlEnv = process.env): PoolOpti
   const shared = {
     waitForConnections: true,
     connectionLimit: runtime.connectionLimit,
-    maxIdle: runtime.connectionLimit,
-    idleTimeout: 60_000,
-    queueLimit: 100,
+    maxIdle: 1,
+    idleTimeout: 30_000,
+    queueLimit: runtime.queueLimit,
     connectTimeout: 15_000,
     enableKeepAlive: true,
     namedPlaceholders: false,
@@ -136,16 +144,25 @@ export async function closeMySqlPool() {
   }
 }
 
+export function withMaxExecutionTime(sql: string, timeoutMs: number) {
+  if (!/^\s*SELECT\b/i.test(sql)) return sql;
+  return sql.replace(
+    /^(\s*)SELECT\b/i,
+    `$1SELECT /*+ MAX_EXECUTION_TIME(${Math.trunc(timeoutMs)}) */`
+  );
+}
+
 export const queryRows = async <T extends object = Record<string, unknown>>(
   sql: string,
   values: readonly unknown[] = []
 ): Promise<T[]> => {
   const pool = getMySqlPool();
   await ensureReadOnlyAccount(pool);
+  const runtime = getMySqlRuntimeConfig();
   const [rows] = await pool.execute<RowDataPacket[]>({
-    sql,
+    sql: withMaxExecutionTime(sql, runtime.statementTimeoutMs),
     values: [...values] as never[],
-    timeout: getMySqlRuntimeConfig().queryTimeoutMs
+    timeout: runtime.queryTimeoutMs
   });
   return rows as T[];
 };

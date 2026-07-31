@@ -25,9 +25,10 @@ tourism-catchment mobility analysis. The current MVP contains:
   partial/failed/stuck states, and restricted operations details.
 - **Exports:** Flow CSV/GeoJSON, routes CSV, mobility flows CSV, and mobility
   zones GeoJSON.
-- **Automatic updates:** the worker builds Redis snapshots at `:12` and `:42`;
-  latest-mode browsers poll a lightweight version endpoint every 30 seconds and
-  update changed data without requiring Refresh, Retry, or a page reload.
+- **Snapshot updates:** production pages and browser refreshes read Redis only.
+  An authorized manual refresh builds and atomically publishes a new snapshot;
+  latest-mode browsers poll the lightweight Redis version pointer every 30
+  seconds and adopt a newly published version.
 
 Feature flags control mobility and places serving. Unsupported incidents and
 analytics remain unavailable until their production gates pass. Production never
@@ -60,11 +61,21 @@ the normalized legacy route tables only when `ROUTE_READ_CONTRACT_FALLBACK_ENABL
 
 Route Performance reads only active `airport_tourism` definitions, grouped into seven DPS Airport corridor pairs. Each `from_airport` and `to_airport` direction remains an independent measurement; missing directions are never filled from the reverse route.
 
-Startup validates non-null slot/duration columns, the unique Flow and Route slot indexes, populated latest pointers, duplicate Route slots, and SRID 4326 route geometry. The same read-only checks are exposed to an authorized operations role at `GET /api/v1/ops/source-contract`.
+Release and operations checks validate non-null slot/duration columns, the
+unique Flow and Route slot indexes, populated latest pointers, duplicate Route
+slots, and SRID 4326 route geometry. These full-catalogue checks are deliberately
+excluded from page rendering and snapshot refreshes. They remain available to
+an authorized operations role at `GET /api/v1/ops/source-contract`.
 
 Flow viewport reads use a prepared WGS84 polygon, `MBRIntersects`, and `ST_Intersects`. Latest mode uses `traffic_flow_latest`; historical mode requires an exact eligible collection slot. Route selection is independent per active route and geometry is returned in `section_index` order.
 
-The live dashboard prefers an immutable Redis traffic cache built after each successful collection run. MapLibre downloads only visible, precomputed HERE traffic line and pulse-point vector tiles; pan, zoom, and confidence changes never query MySQL. A lightweight `/api/v1/dashboard/version` check runs every 30 seconds and switches to a new atomic Redis version pointer only when its validated version changes. Exact historical slots continue to use their immutable GeoJSON API response. If the Redis traffic cache is missing or outdated in `prefer` mode, the application materializes the latest validated MySQL dashboard state; if that build fails, it safely returns the live MySQL response.
+The live dashboard uses an immutable Redis traffic cache. MapLibre downloads
+only visible, precomputed HERE traffic line and pulse-point vector tiles; page
+loads, pan, zoom, confidence changes, and the 30-second
+`/api/v1/dashboard/version` check never query MySQL. If the snapshot is
+unavailable, production returns an explicit unavailable state until an
+authorized manual refresh publishes a replacement. Exact historical slots
+continue to use their bounded API response.
 
 ## Configuration
 
@@ -134,13 +145,29 @@ docker compose -f docker-compose.yaml -f docker-compose.local.yaml up --build
 
 The local override reaches a host MySQL server through `host.docker.internal`.
 Set `DOCKER_MYSQL_HOST` if the database is elsewhere.
-The `snapshot-worker` service refreshes the Redis traffic snapshot immediately
-at startup and every 30 minutes without overlapping builds. After each
-successful snapshot it also prewarms the mobility catchment and airport
-simulation cache so browsers do not trigger the expensive cold queries. The
-cycle is aligned 12 minutes after each collection boundary (`:12` and `:42`)
-to allow collection and model writes to finish. Set
-`SNAPSHOT_REFRESH_INTERVAL_MINUTES=15` to use a 15-minute interval instead.
+The continuous `snapshot-worker` is disabled from the default Compose profile.
+Production refreshes are manual so a database slowdown cannot create a retry
+loop. To build and publish a snapshot through the protected application path:
+
+```bash
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $OPERATIONS_API_TOKEN" \
+  https://traffic.example.com/api/v1/dashboard/refresh
+```
+
+The endpoint permits at most two attempts per five minutes per web process and
+uses a fixed 120-second shared Redis cooldown lock so only one process can start
+a live refresh. Production snapshot-only behavior and database safety limits are
+enforced by the application and require no new environment settings.
+The public dashboard Refresh button only reloads the latest published Redis
+snapshot.
+
+If continuous refresh is intentionally re-enabled later, start its explicit
+profile:
+
+```bash
+docker compose --profile automatic-refresh up -d snapshot-worker
+```
 
 Run the one-shot snapshot builder with:
 
@@ -160,14 +187,15 @@ architecture, testing, performance constraints, and the recommended future
 development workflow are documented in the
 [development guide](docs/development-guide.md).
 The application archetype, programming style, runtime components, feature
-catalog, data flows, caching behavior, and automatic refresh lifecycle are
+catalog, data flows, caching behavior, and snapshot refresh lifecycle are
 documented in the
 [application architecture and feature guide](docs/application-architecture.md).
 
-The deployment uses separate Dockerized Next.js web and snapshot-worker process
-roles on Amazon EC2, connected privately to the existing RDS MySQL database and
-an ElastiCache Redis/Valkey endpoint. A maintenance-profile snapshot builder is
-available for one-shot recovery builds.
+The deployment uses a Dockerized Next.js web process plus on-demand snapshot
+workloads on Amazon EC2, connected privately to the existing RDS MySQL database
+and an ElastiCache Redis/Valkey endpoint. The scheduled worker is an explicit
+opt-in profile; a maintenance-profile builder is available for one-shot recovery
+builds.
 Compressed, bounded GeoJSON responses, dashboard snapshots, and immutable traffic
 vector tiles all use Redis. No local cache volume or native cache database is required.
 

@@ -270,10 +270,32 @@ export async function getAirportRouteDefinitions(query: QueryRows = queryRows): 
 
 export async function getLatestAirportRouteMeasurements(query: QueryRows = queryRows): Promise<RouteSummary[]> {
   const rows = await query<LatestRouteRow>(
-    `SELECT latest.*, definitions.route_purpose, definitions.category, definitions.active
-       FROM api_airport_route_latest_v1 latest
-       JOIN api_airport_tourism_routes_v1 definitions ON definitions.route_id = latest.route_id
-      ORDER BY latest.display_order, latest.route_direction`
+    `SELECT definitions.*,
+            sample.id AS route_sample_id,
+            sample.ingestion_run_id,
+            sample.collection_slot_utc,
+            sample.sampled_at_utc,
+            sample.provider,
+            sample.distance_meters,
+            sample.current_duration_seconds,
+            sample.typical_duration_seconds,
+            sample.base_duration_seconds,
+            sample.delay_vs_typical_seconds,
+            sample.delay_vs_base_seconds,
+            sample.ratio_vs_typical,
+            sample.ratio_vs_base,
+            sample.http_status,
+            TIMESTAMPDIFF(MINUTE, sample.collection_slot_utc, UTC_TIMESTAMP()) AS slot_age_minutes
+       FROM api_airport_tourism_routes_v1 definitions
+       LEFT JOIN route_samples sample ON sample.id = (
+         SELECT candidate.id
+           FROM route_samples candidate
+          WHERE candidate.route_id = definitions.route_id
+            AND candidate.provider = 'here'
+          ORDER BY candidate.collection_slot_utc DESC
+          LIMIT 1
+       )
+      ORDER BY definitions.display_order, definitions.route_direction`
   );
   return rows.map((row) => {
     if (!row.route_group_key || !row.tourism_center_key) {

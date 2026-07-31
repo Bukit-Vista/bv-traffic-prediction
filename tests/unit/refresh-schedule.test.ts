@@ -3,7 +3,8 @@ import {
   DASHBOARD_RECOVERY_RETRY_MS,
   DASHBOARD_VERSION_POLL_MS,
   nextAlignedRefreshDelayMs,
-  nextDashboardRefreshDelayMs
+  nextDashboardRefreshDelayMs,
+  nextSnapshotFailureDelayMs
 } from "@/lib/snapshot/refresh-schedule";
 
 describe("aligned refresh schedule", () => {
@@ -40,5 +41,23 @@ describe("aligned refresh schedule", () => {
     expect(nextDashboardRefreshDelayMs(false)).toBe(DASHBOARD_VERSION_POLL_MS);
     expect(nextDashboardRefreshDelayMs(true)).toBe(DASHBOARD_RECOVERY_RETRY_MS);
     expect(DASHBOARD_RECOVERY_RETRY_MS).toBeLessThan(DASHBOARD_VERSION_POLL_MS);
+  });
+
+  it("backs off worker failures instead of retrying every minute", () => {
+    expect(nextSnapshotFailureDelayMs(1, 30)).toBe(5 * 60_000);
+    expect(nextSnapshotFailureDelayMs(2, 30)).toBe(10 * 60_000);
+    expect(nextSnapshotFailureDelayMs(3, 30)).toBe(20 * 60_000);
+    expect(nextSnapshotFailureDelayMs(4, 30)).toBe(30 * 60_000);
+    expect(nextSnapshotFailureDelayMs(10, 30)).toBe(30 * 60_000);
+    expect(nextSnapshotFailureDelayMs(1, 5)).toBe(5 * 60_000);
+  });
+
+  it("rejects invalid worker failure retry inputs", () => {
+    expect(() => nextSnapshotFailureDelayMs(0, 30)).toThrow(
+      "Snapshot failure retry configuration is invalid."
+    );
+    expect(() => nextSnapshotFailureDelayMs(1, 0)).toThrow(
+      "Snapshot failure retry configuration is invalid."
+    );
   });
 });

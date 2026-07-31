@@ -64,8 +64,10 @@ describe("Step 1 database serving views", () => {
 
   it("maps nullable latest measurements and preserves negative route delays", async () => {
     const query: QueryRows = async (sql) => {
-      expect(sql).toContain("api_airport_route_latest_v1");
       expect(sql).toContain("api_airport_tourism_routes_v1");
+      expect(sql).toContain("ORDER BY candidate.collection_slot_utc DESC");
+      expect(sql).toContain("LIMIT 1");
+      expect(sql).not.toContain("LEFT JOIN route_samples newer");
       return [{
         scope_key: "scope", scope_version: "v1", scope_status: "draft", prediction_enabled: 0,
         display_order: 1, route_id: 2, slug: "canggu-to-airport", route_group_key: "dps-canggu",

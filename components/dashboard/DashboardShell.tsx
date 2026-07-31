@@ -235,13 +235,6 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
   useEffect(() => {
     let disposed = false;
     const startedAt = performance.now();
-    const params = new URLSearchParams(window.location.search);
-    const requestedAt = params.get("at");
-    const bootAt = requestedAt && requestedAt !== "latest" && Number.isFinite(new Date(requestedAt).getTime())
-      ? new Date(requestedAt).toISOString()
-      : "latest";
-    const requestedRouteId = Number(params.get("route"));
-    const route = initialData.routes.find((item) => item.id === requestedRouteId) ?? initialData.routes[0] ?? null;
     const tasks: Array<{ label: string; run: () => Promise<unknown> }> = [
       { label: "Rendering map", run: () => waitForInitialMap() }
     ];
@@ -298,36 +291,6 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
       });
     }
 
-    if (airportTourismRoutesEnabled && route) {
-      const geometryAt = route.collectionSlotUtc ?? bootAt;
-      const geometryKey = `${route.id}|${bootAt}|${route.collectionSlotUtc ?? "no-slot"}`;
-      const historyKey = `${route.id}|history|12h|${route.collectionSlotUtc ?? "no-slot"}`;
-      tasks.push(
-        {
-          label: "Preparing route map",
-          run: async () => {
-            const result = await fetchCachedJson<RouteGeometry>(
-              `/api/v1/routes/${route.id}/geometry?at=${encodeURIComponent(geometryAt)}`
-            );
-            const geometry = { type: "FeatureCollection", features: result.features } as RouteGeometry;
-            cacheRouteDetail(geometryKey, { geometry });
-            return geometry;
-          }
-        },
-        {
-          label: "Preparing route history",
-          run: async () => {
-            const result = await fetchCachedJson<{ data: { points: RouteHistoryPoint[]; window: { startUtc: string; endExclusiveUtc: string }; coverage: HistoryCoverage } }>(
-              `/api/v1/routes/${route.id}/history?hours=12`
-            );
-            const history = routeHistoryWithGaps(result.data.points, result.data.window);
-            cacheRouteDetail(historyKey, { history, historyCoverage: result.data.coverage });
-            return result;
-          }
-        }
-      );
-    }
-
     setBoot((current) => ({ ...current, total: tasks.length }));
     const preload = tasks.map(async (task) => {
       try {
@@ -351,8 +314,6 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
       disposed = true;
     };
   }, [
-    airportTourismRoutesEnabled,
-    initialData.routes,
     mobilityCatchmentPreviewEnabled,
     mobilityCatchmentV2PublicEnabled,
     mobilityPlacesLayerEnabled,
@@ -568,9 +529,9 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
     if (refreshing) return;
     setRefreshing(true);
     try {
-      const response = await fetch("/api/v1/dashboard/refresh", { method: "POST", cache: "no-store" });
-      const result = await json<{ data: { dashboard: SourceDashboardData; cacheAction: "reused" | "rebuilt" | "live_fallback" } }>(response);
-      const dashboard = result.data.dashboard;
+      const response = await fetch("/api/v1/traffic/snapshot", { cache: "no-store" });
+      const result = await json<{ data: SourceDashboardData }>(response);
+      const dashboard = result.data;
       etagCacheRef.current.clear();
       serverVersionsRef.current = dashboard.versions;
       appliedVersionsRef.current = dashboard.versions;
@@ -586,11 +547,9 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
         : dashboard.routes[0]?.id ?? 0);
       setMode("latest");
       setHistoricalSlot(null);
-      setRefreshError(result.data.cacheAction === "live_fallback"
-        ? "Live data was loaded, but the cached snapshot could not be replaced. The dashboard will continue using live data."
-        : null);
+      setRefreshError(null);
     } catch (error) {
-      setRefreshError(error instanceof Error ? publicDataMessage(error.message) : "The live refresh failed. Previous valid data remains visible.");
+      setRefreshError(error instanceof Error ? publicDataMessage(error.message) : "The published snapshot refresh failed. Previous valid data remains visible.");
     } finally {
       setRefreshing(false);
     }
