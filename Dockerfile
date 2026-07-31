@@ -42,7 +42,7 @@ COPY --from=builder --chown=node:node /app/tsconfig.json ./
 COPY --from=builder --chown=node:node /app/config ./config
 COPY --from=builder --chown=node:node /app/lib ./lib
 COPY --from=builder --chown=node:node /app/public ./public
-COPY --from=builder --chown=node:node /app/scripts/build-traffic-snapshot.ts /app/scripts/run-traffic-snapshot-worker.ts ./scripts/
+COPY --from=builder --chown=node:node /app/scripts/build-traffic-snapshot.ts /app/scripts/run-traffic-snapshot-worker.ts /app/scripts/check-snapshot-worker-health.ts ./scripts/
 
 USER node
 CMD ["node", "--import", "tsx", "scripts/run-traffic-snapshot-worker.ts"]

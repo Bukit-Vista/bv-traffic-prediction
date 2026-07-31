@@ -156,25 +156,28 @@ The web process can read both Redis and MySQL. MySQL access is restricted to a
 SELECT-only account, and production startup rejects an account with mutation
 privileges.
 
-### 5.2 Optional snapshot worker
+### 5.2 Scheduled snapshot worker
 
-The worker is an optional explicit-profile Node.js process. Production keeps it
-disabled by default because refreshes are manually authorized. When enabled it:
+The worker is a default Node.js process. It:
 
 1. runs immediately after startup;
-2. reads the latest valid dashboard state from MySQL;
-3. creates compressed dashboard data and vector tiles;
-4. writes versioned values to Redis;
-5. publishes the current-version pointer last;
-6. prewarms enabled catchment caches;
-7. waits for the next aligned schedule.
+2. acquires a renewable owner-token Redis refresh lease;
+3. compares lightweight MySQL source identities with the active Redis snapshot;
+4. returns without a full read when nothing changed;
+5. otherwise creates compressed dashboard data and vector tiles;
+6. writes versioned values to Redis and publishes the pointer last;
+7. prewarms enabled catchment caches only after a rebuilt snapshot;
+8. waits for the next aligned schedule.
 
 The default schedule is every 30 minutes with a 12-minute offset, producing
 runs at `:12` and `:42`. The offset allows the upstream collector and model
 pipeline time to finish their writes.
 
-The default production deployment does not run this retry loop. The protected
-manual refresh uses a shared Redis cooldown lock and bounded MySQL concurrency.
+Failures back off from five minutes up to the next scheduled interval. Scheduled
+and protected manual refreshes use the same lease, which is renewed during work,
+checked immediately before pointer activation, and released by its owner only.
+The worker publishes a Redis heartbeat every 30 seconds for Docker and operations
+health checks without querying MySQL.
 
 ### 5.3 One-shot snapshot builder
 
@@ -515,9 +518,9 @@ Production should replace the local Redis service with private
 Redis/ElastiCache and provide the RDS and cache endpoints through deployment
 configuration and a secrets manager.
 
-The web and optional worker should be deployed as separate services or task definitions
-because they have independent lifecycle, scaling, and health requirements. Only
-one worker replica should run unless a distributed build lock is added.
+The web and worker should be deployed as separate services or task definitions
+because they have independent lifecycle, scaling, and health requirements. A
+renewable Redis build lease prevents concurrent database refreshes across replicas.
 
 ## 14. Testing and release validation
 

@@ -166,6 +166,7 @@ export async function buildTrafficSnapshot(
     store?: RedisCacheStore | null;
     minZoom?: number;
     maxZoom?: number;
+    beforeActivate?: () => Promise<void>;
   } = {}
 ): Promise<TrafficSnapshotPointer> {
   validateSource(dashboard);
@@ -285,6 +286,7 @@ export async function buildTrafficSnapshot(
     trafficSnapshotManifestKey(version, env),
     JSON.stringify(manifest)
   );
+  await options.beforeActivate?.();
   await store.set(
     trafficSnapshotPointerKey(env),
     JSON.stringify(pointer)

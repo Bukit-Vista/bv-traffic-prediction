@@ -28,6 +28,10 @@ export type RedisCacheStore = {
   set(key: string, value: string, options?: { EX?: number; NX?: true }): Promise<unknown>;
   del(key: string): Promise<unknown>;
   expire?(key: string, seconds: number): Promise<unknown>;
+  eval?(
+    script: string,
+    options: { keys: string[]; arguments: string[] }
+  ): Promise<unknown>;
   ping(): Promise<string>;
 };
 

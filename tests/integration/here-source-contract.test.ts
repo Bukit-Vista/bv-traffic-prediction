@@ -6,13 +6,14 @@ import { getFlowMap, getMvpWindowStatus, getRouteGeometry, getRouteHistory } fro
 import { completedUtcHourWindow } from "@/lib/api/mvp-window";
 
 const enabled = process.env.RUN_MYSQL_CONTRACT_TESTS === "1";
+const CONTRACT_TEST_TIMEOUT_MS = 60_000;
 
 describe.skipIf(!enabled)("read-only HERE MySQL contract", () => {
   it("has the canonical non-null columns, unique slots, latest pointers, and SRID 4326 geometry", async () => {
     const checks = await validateFullSourceContract();
     expect(checks).not.toHaveLength(0);
     expect(checks.every((check) => check.ok)).toBe(true);
-  });
+  }, CONTRACT_TEST_TIMEOUT_MS);
 
   it("serves the deployed Step 3 Flow, collector, history, and geometry read paths", async () => {
     const [flow, collectors, definitions] = await Promise.all([
@@ -44,5 +45,5 @@ describe.skipIf(!enabled)("read-only HERE MySQL contract", () => {
     expect(windowStatus.flow.expectedSlots).toBe(24);
     expect(windowStatus.routes.expectedSlots).toBe(12);
     expect(windowStatus.routes.expectedSamples).toBe(168);
-  });
+  }, CONTRACT_TEST_TIMEOUT_MS);
 });

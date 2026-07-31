@@ -18,7 +18,7 @@ workloads. They do not run inside the public web container.
 | Database | Existing Amazon RDS for MySQL; do not migrate to PostgreSQL |
 | Database access | Private network, TLS, and a SELECT-only web account |
 | Cache store | ElastiCache Redis OSS/Valkey for JSON, GeoJSON, dashboard state, and vector tiles |
-| Snapshot behavior | Authorized manual refresh is the production default; the scheduled worker is an explicit opt-in profile |
+| Snapshot behavior | Fixed twice-hourly Redis-coordinated refresh, plus authorized manual recovery |
 | Cache retention | Active traffic version persists; replaced versions expire after 48 hours |
 | Reverse proxy | Caddy terminates TLS and proxies to the web container |
 | Redis | Private ElastiCache Redis OSS/Valkey for all shared application cache data |
@@ -53,7 +53,8 @@ Collectors/model workers --> RDS MySQL
                          \--> optional immediate one-shot snapshot build
 ```
 
-One web container and an on-demand snapshot builder are intentional:
+One web container, one scheduled snapshot worker, and an on-demand snapshot
+builder are intentional:
 
 - public page loads and browser refreshes never materialize a missing Redis
   version from MySQL;
@@ -63,7 +64,7 @@ One web container and an on-demand snapshot builder are intentional:
 - MapLibre renders in the browser, so the server primarily handles SSR, JSON, and
   immutable vector-tile reads.
 - an authorized manual operation builds cache data independently of browser
-  traffic and is protected by a shared Redis cooldown lock.
+  traffic and is protected by a renewable owner-token Redis lease.
 
 Do not add a second web replica until the scale-out prerequisites in section 16
 are complete.
@@ -144,15 +145,17 @@ The Docker deployment must define these workloads:
 | --- | --- | --- |
 | `web` | `node server.js` | Long-running |
 | `snapshot-builder` | `node --import tsx scripts/build-traffic-snapshot.ts` | One-shot |
-| `snapshot-worker` | `node --import tsx scripts/run-traffic-snapshot-worker.ts` | Optional explicit profile only |
+| `snapshot-worker` | `node --import tsx scripts/run-traffic-snapshot-worker.ts` | Long-running bounded scheduler |
 
 The web workload uses the minimal Next.js standalone image. Snapshot workloads use
 a separate worker image containing production dependencies and only the two
 snapshot entrypoints. All workloads share the environment contract, Redis endpoint,
 and Redis namespace. Publish container port `3000` only to `127.0.0.1:3000` on the
-host. Use `restart: unless-stopped` for the web container. Keep the automatic
-worker profile disabled unless an incident-reviewed schedule is intentionally
-restored.
+host. Use `restart: unless-stopped` for the web and snapshot-worker containers.
+The worker timing is fixed at `:12` and `:42`; its renewable Redis lease prevents
+concurrent refreshes, and its lightweight identity check skips full reads when
+the completed source state has not changed. A 30-second Redis heartbeat drives
+the container health check without querying MySQL.
 
 The production image must:
 
@@ -266,8 +269,6 @@ REDIS_TRAFFIC_SNAPSHOT_TTL_SECONDS=172800
 REDIS_TRAFFIC_MAX_DASHBOARD_BYTES=8388608
 REDIS_TRAFFIC_MAX_TILE_BYTES=2097152
 REDIS_TRAFFIC_MAX_TOTAL_BYTES=335544320
-SNAPSHOT_REFRESH_INTERVAL_MINUTES=30
-SNAPSHOT_REFRESH_OFFSET_MINUTES=12
 
 BASEMAP_DEPLOYMENT_MODE=managed
 BASEMAP_TILE_URL=https://managed-map-source.example/{z}/{x}/{y}.png
@@ -290,7 +291,8 @@ Use `REDIS_TRAFFIC_CACHE_MODE=prefer` for the MVP:
 - a missing snapshot returns an unavailable response instead of building from
   public traffic;
 - an authorized refresh reads MySQL and publishes a complete version;
-- a shared Redis lock prevents concurrent refreshes across web processes.
+- a renewable owner-token Redis lease prevents concurrent refreshes across processes;
+- snapshot publication failures return HTTP 503 without replacing the active pointer;
 
 Set database-view requirement flags to `true` only after the corresponding views
 are deployed.
@@ -408,7 +410,7 @@ Collect:
 
 - Caddy access logs and status codes;
 - Docker container logs, health, restarts, CPU, memory, and open files;
-- authorized snapshot build age, duration, failures, and cooldown-lock state;
+- authorized snapshot build age, duration, failures, worker heartbeat, and lease state;
 - API latency by route;
 - MySQL pool wait time, query errors, and connection saturation;
 - Redis used memory, hit/miss rate, evictions, connection failures, and latency;
