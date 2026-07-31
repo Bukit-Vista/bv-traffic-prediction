@@ -40,7 +40,10 @@ services:
       dockerfile: Dockerfile
       target: worker-runtime
     command: ["node", "--import", "tsx", "scripts/run-traffic-snapshot-worker.ts"]
-    profiles: ["automatic-refresh"]
     restart: unless-stopped
     healthcheck:
-      disable: true
+      test: ["CMD", "node", "--import", "tsx", "scripts/check-snapshot-worker-health.ts"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5m
+      retries: 3

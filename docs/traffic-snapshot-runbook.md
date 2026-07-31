@@ -4,8 +4,8 @@ Status: current operations guidance. Last reviewed: 29 July 2026.
 
 ## Purpose
 
-Move dashboard read and rendering work out of the request path. An authorized
-manual refresh materializes the newest eligible HERE Flow and Route state and
+Move dashboard read and rendering work out of the request path. A bounded
+scheduled or authorized manual refresh materializes the newest eligible HERE Flow and Route state and
 stores the reduced dashboard payload plus precomputed vector tiles in Redis.
 The one-shot builder performs the same operation for initial creation or recovery.
 Requests read versioned Redis keys instead of executing MySQL spatial joins or
@@ -41,10 +41,14 @@ The bundled Redis service uses an AOF-backed named Docker volume. Managed
 production Redis should provide equivalent replication/persistence. The web and
 one-shot builder containers must use the same Redis endpoint and namespace.
 
-## Manual production refresh
+## Automatic and manual production refresh
 
-The continuous `snapshot-worker` is outside the default Compose profile. This
-prevents a slow database statement from creating an automatic retry loop.
+The `snapshot-worker` is part of the default Compose services. It runs at startup
+and then at `:12` and `:42`. A renewable owner-token Redis lease permits only one refresh across
+replicas. Each scheduled check compares lightweight source identities first; it
+does not run the full dashboard read or tile build when Redis already represents
+the current completed source state. Failures use bounded exponential backoff.
+The schedule and backoff are fixed in code and require no new environment values.
 
 Start the production-shaped local services with:
 
@@ -92,9 +96,10 @@ expires, allowing in-flight browsers to finish using an older tile URL.
 ## Production runtime behavior
 
 Production page rendering always requires a published snapshot. Public traffic
-cannot enable a live MySQL fallback through deployment configuration. The
-manual refresh cooldown is fixed at 120 seconds in application code, so no new
-production environment settings are required.
+cannot enable a live MySQL fallback through deployment configuration. Scheduled
+and manual refreshes share a renewable 15-minute Redis lease that is released
+after completion. Ownership is checked again immediately before the current
+pointer is published. No new production environment settings are required.
 
 ## Health verification
 
@@ -106,7 +111,9 @@ curl -fsS http://127.0.0.1:3000/api/v1/dashboard/version
 curl -fsS http://127.0.0.1:3000/api/v1/traffic/snapshot
 ```
 
-The health response must report `redis: "ok"` and `snapshot.status: "ok"`.
+The health response must report `redis: "ok"`, `snapshot.status: "ok"`, and
+`worker.status: "ok"`. The worker writes a Redis heartbeat every 30 seconds;
+Docker marks it unhealthy when the heartbeat is missing or older than three minutes.
 Readiness checks Redis, the dashboard payload, manifest, and one real tile
 without querying MySQL. The returned tile version, Flow `sourceRunId`, and slot
 must match the accepted automation run. Tile requests use

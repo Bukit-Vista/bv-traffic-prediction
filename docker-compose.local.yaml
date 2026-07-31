@@ -57,8 +57,6 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_CACHE_ENABLED: "true"
       REDIS_CACHE_REQUIRED: "true"
-      SNAPSHOT_REFRESH_INTERVAL_MINUTES: ${SNAPSHOT_REFRESH_INTERVAL_MINUTES:-30}
-      SNAPSHOT_REFRESH_OFFSET_MINUTES: ${SNAPSHOT_REFRESH_OFFSET_MINUTES:-12}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

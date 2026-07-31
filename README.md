@@ -26,7 +26,7 @@ tourism-catchment mobility analysis. The current MVP contains:
 - **Exports:** Flow CSV/GeoJSON, routes CSV, mobility flows CSV, and mobility
   zones GeoJSON.
 - **Snapshot updates:** production pages and browser refreshes read Redis only.
-  An authorized manual refresh builds and atomically publishes a new snapshot;
+  A bounded scheduler or authorized manual refresh atomically publishes a new snapshot;
   latest-mode browsers poll the lightweight Redis version pointer every 30
   seconds and adopt a newly published version.
 
@@ -74,7 +74,7 @@ only visible, precomputed HERE traffic line and pulse-point vector tiles; page
 loads, pan, zoom, confidence changes, and the 30-second
 `/api/v1/dashboard/version` check never query MySQL. If the snapshot is
 unavailable, production returns an explicit unavailable state until an
-authorized manual refresh publishes a replacement. Exact historical slots
+scheduled or authorized manual refresh publishes a replacement. Exact historical slots
 continue to use their bounded API response.
 
 ## Configuration
@@ -145,9 +145,13 @@ docker compose -f docker-compose.yaml -f docker-compose.local.yaml up --build
 
 The local override reaches a host MySQL server through `host.docker.internal`.
 Set `DOCKER_MYSQL_HOST` if the database is elsewhere.
-The continuous `snapshot-worker` is disabled from the default Compose profile.
-Production refreshes are manual so a database slowdown cannot create a retry
-loop. To build and publish a snapshot through the protected application path:
+The `snapshot-worker` starts with the default Compose services. It runs once at
+startup and then at `:12` and `:42`, using a renewable Redis lease so only one
+instance performs database work. It first compares a lightweight source identity
+with the active Redis snapshot and skips the full dashboard read and tile build
+when nothing changed. Timing is fixed in application code and needs no new
+environment values. To build and publish a snapshot through the protected
+application path:
 
 ```bash
 curl --fail-with-body -X POST \
@@ -156,18 +160,12 @@ curl --fail-with-body -X POST \
 ```
 
 The endpoint permits at most two attempts per five minutes per web process and
-uses a fixed 120-second shared Redis cooldown lock so only one process can start
-a live refresh. Production snapshot-only behavior and database safety limits are
+uses a renewable, owner-token Redis lease so only one process can publish a
+refresh. A failed publication returns HTTP 503 and leaves the previous pointer
+unchanged. Production snapshot-only behavior and database safety limits are
 enforced by the application and require no new environment settings.
 The public dashboard Refresh button only reloads the latest published Redis
 snapshot.
-
-If continuous refresh is intentionally re-enabled later, start its explicit
-profile:
-
-```bash
-docker compose --profile automatic-refresh up -d snapshot-worker
-```
 
 Run the one-shot snapshot builder with:
 
@@ -197,11 +195,11 @@ catalog, data flows, caching behavior, and snapshot refresh lifecycle are
 documented in the
 [application architecture and feature guide](docs/application-architecture.md).
 
-The deployment uses a Dockerized Next.js web process plus on-demand snapshot
+The deployment uses a Dockerized Next.js web process plus a bounded snapshot
 workloads on Amazon EC2, connected privately to the existing RDS MySQL database
-and an ElastiCache Redis/Valkey endpoint. The scheduled worker is an explicit
-opt-in profile; a maintenance-profile builder is available for one-shot recovery
-builds.
+and an ElastiCache Redis/Valkey endpoint. The scheduled worker uses a fixed
+twice-hourly schedule; a maintenance-profile builder is available for one-shot
+recovery builds.
 Compressed, bounded GeoJSON responses, dashboard snapshots, and immutable traffic
 vector tiles all use Redis. No local cache volume or native cache database is required.
 

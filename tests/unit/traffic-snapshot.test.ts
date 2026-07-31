@@ -158,6 +158,26 @@ describe("immutable Redis traffic cache", () => {
     expect(await readTrafficVectorTile("../invalid", zoom, 0, 0, env, store)).toBeNull();
   });
 
+  it("checks refresh-lease ownership after writing data and before activating the pointer", async () => {
+    const { store, values } = memoryStore();
+    const env = cacheEnv();
+    const beforeActivate = vi.fn(async () => {
+      expect(values.has(trafficSnapshotPointerKey(env))).toBe(false);
+      throw new Error("lease lost");
+    });
+
+    await expect(buildTrafficSnapshot(dashboard(), {
+      env,
+      store,
+      minZoom: 7,
+      maxZoom: 7,
+      beforeActivate
+    })).rejects.toThrow("lease lost");
+
+    expect(beforeActivate).toHaveBeenCalledOnce();
+    expect(await readTrafficSnapshotPointer(env, store)).toBeNull();
+  });
+
   it("materializes once for concurrent requests and reuses the Redis version", async () => {
     const { store } = memoryStore();
     const env = cacheEnv();

@@ -26,7 +26,8 @@ function snapshotMatchesDashboard(snapshot: SourceDashboardData, dashboard: Sour
 export async function ensureLatestTrafficSnapshot(
   dashboard: SourceDashboardData,
   env: TrafficSnapshotEnv = process.env,
-  suppliedStore?: RedisCacheStore | null
+  suppliedStore?: RedisCacheStore | null,
+  beforeActivate?: () => Promise<void>
 ) {
   if (trafficSnapshotMode(env) === "off") return null;
 
@@ -53,7 +54,11 @@ export async function ensureLatestTrafficSnapshot(
       return refreshed;
     }
 
-    await buildTrafficSnapshot(dashboard, { env, store: suppliedStore });
+    await buildTrafficSnapshot(dashboard, {
+      env,
+      store: suppliedStore,
+      beforeActivate
+    });
     const materialized = await readCurrentDashboardSnapshot(env, suppliedStore);
     if (!materialized || !snapshotMatchesDashboard(materialized, dashboard)) {
       throw new Error("The Redis traffic cache does not match the latest MySQL dashboard data.");

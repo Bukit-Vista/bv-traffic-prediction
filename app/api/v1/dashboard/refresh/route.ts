@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     const result = await refreshDashboardCache();
     const response = apiJson(result, {
       ...result.dashboard.meta,
-      source: result.cacheAction === "live_fallback" ? "here_mysql" : "here_snapshot_redis"
+      source: "here_snapshot_redis"
     });
     response.headers.set("Cache-Control", "no-store");
     return response;
