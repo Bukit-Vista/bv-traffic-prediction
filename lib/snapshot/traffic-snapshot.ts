@@ -27,6 +27,21 @@ export type TrafficSnapshotPointer = TrafficTileSnapshot & {
   versions: DashboardResourceVersions;
 };
 
+export type TrafficSnapshotManifest = {
+  schemaVersion: number;
+  version: string;
+  dashboardKey: string;
+  tileKeys: string[];
+};
+
+export type TrafficSnapshotReadiness = {
+  status: "ok" | "unavailable";
+  reason: "ready" | "pointer_missing" | "manifest_missing" | "manifest_invalid" |
+    "dashboard_missing" | "dashboard_invalid" | "tile_missing";
+  version: string | null;
+  createdAtUtc: string | null;
+};
+
 export type TrafficSnapshotEnv = RedisCacheEnv & {
   REDIS_TRAFFIC_CACHE_MODE?: string;
   REDIS_TRAFFIC_SNAPSHOT_TTL_SECONDS?: string;
@@ -90,6 +105,10 @@ export function trafficSnapshotDashboardKey(version: string, env: TrafficSnapsho
   return `${cachePrefix(env)}:${version}:dashboard`;
 }
 
+export function trafficSnapshotManifestKey(version: string, env: TrafficSnapshotEnv = process.env) {
+  return `${cachePrefix(env)}:${version}:manifest`;
+}
+
 export function trafficSnapshotTileKey(
   version: string,
   zoom: number,
@@ -112,6 +131,23 @@ function validPointer(value: unknown): value is TrafficSnapshotPointer {
     typeof pointer.sourceRunId === "string" && typeof pointer.slotUtc === "string" &&
     typeof versions?.flow === "string" && typeof versions.routes === "string" &&
     typeof versions.flowHealth === "string" && typeof versions.routeHealth === "string";
+}
+
+function validManifest(
+  value: unknown,
+  pointer: TrafficSnapshotPointer,
+  env: TrafficSnapshotEnv
+): value is TrafficSnapshotManifest {
+  if (!value || typeof value !== "object") return false;
+  const manifest = value as Partial<TrafficSnapshotManifest>;
+  const tilePrefix = `${cachePrefix(env)}:${pointer.version}:tile:`;
+  return manifest.schemaVersion === TRAFFIC_SNAPSHOT_SCHEMA_VERSION &&
+    manifest.version === pointer.version &&
+    manifest.dashboardKey === trafficSnapshotDashboardKey(pointer.version, env) &&
+    Array.isArray(manifest.tileKeys) &&
+    manifest.tileKeys.length === pointer.tileCount &&
+    new Set(manifest.tileKeys).size === manifest.tileKeys.length &&
+    manifest.tileKeys.every((key) => typeof key === "string" && key.startsWith(tilePrefix));
 }
 
 async function resolveStore(
@@ -138,6 +174,24 @@ export async function readTrafficSnapshotPointer(
     const parsed = JSON.parse(raw) as unknown;
     if (!validPointer(parsed)) throw new Error("Redis traffic snapshot pointer is invalid.");
     return parsed;
+  } catch (error) {
+    if (trafficSnapshotMode(env) === "require") throw error;
+    return null;
+  }
+}
+
+export async function readTrafficSnapshotManifest(
+  pointer: TrafficSnapshotPointer,
+  env: TrafficSnapshotEnv = process.env,
+  suppliedStore?: RedisCacheStore | null
+): Promise<TrafficSnapshotManifest | null> {
+  try {
+    const store = await resolveStore(env, suppliedStore);
+    if (!store) return null;
+    const raw = await store.get(trafficSnapshotManifestKey(pointer.version, env));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return validManifest(parsed, pointer, env) ? parsed : null;
   } catch (error) {
     if (trafficSnapshotMode(env) === "require") throw error;
     return null;
@@ -206,6 +260,59 @@ export async function readCurrentDashboardSnapshot(
   } catch (error) {
     if (trafficSnapshotMode(env) === "require") throw error;
     return null;
+  }
+}
+
+export async function trafficSnapshotReadiness(
+  env: TrafficSnapshotEnv = process.env,
+  suppliedStore?: RedisCacheStore | null
+): Promise<TrafficSnapshotReadiness> {
+  const unavailable = (
+    reason: Exclude<TrafficSnapshotReadiness["reason"], "ready">,
+    pointer?: TrafficSnapshotPointer | null
+  ): TrafficSnapshotReadiness => ({
+    status: "unavailable",
+    reason,
+    version: pointer?.version ?? null,
+    createdAtUtc: pointer?.createdAtUtc ?? null
+  });
+  try {
+    const store = await resolveStore(env, suppliedStore);
+    if (!store) return unavailable("pointer_missing");
+    const pointer = await readTrafficSnapshotPointer(env, store);
+    if (!pointer) return unavailable("pointer_missing");
+
+    const encodedDashboard = await store.get(
+      trafficSnapshotDashboardKey(pointer.version, env)
+    );
+    if (!encodedDashboard) return unavailable("dashboard_missing", pointer);
+    try {
+      const dashboard = decodeDashboardSnapshot(encodedDashboard, env);
+      if (
+        dashboard.meta.sourceRunId !== pointer.sourceRunId ||
+        dashboard.meta.slotUtc !== pointer.slotUtc
+      ) {
+        return unavailable("dashboard_invalid", pointer);
+      }
+    } catch {
+      return unavailable("dashboard_invalid", pointer);
+    }
+
+    const rawManifest = await store.get(trafficSnapshotManifestKey(pointer.version, env));
+    if (!rawManifest) return unavailable("manifest_missing", pointer);
+    const manifest = await readTrafficSnapshotManifest(pointer, env, store);
+    if (!manifest) return unavailable("manifest_invalid", pointer);
+    if (!await store.get(manifest.tileKeys[0]!)) {
+      return unavailable("tile_missing", pointer);
+    }
+    return {
+      status: "ok",
+      reason: "ready",
+      version: pointer.version,
+      createdAtUtc: pointer.createdAtUtc
+    };
+  } catch {
+    return unavailable("pointer_missing");
   }
 }
 

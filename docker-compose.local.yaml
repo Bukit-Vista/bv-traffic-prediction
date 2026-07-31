@@ -3,14 +3,18 @@ services:
     image: redis:7.4-alpine
     command:
       - redis-server
-      - --save
-      - ""
       - --appendonly
-      - "no"
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --aof-use-rdb-preamble
+      - "yes"
       - --maxmemory
       - 512mb
       - --maxmemory-policy
-      - allkeys-lru
+      - volatile-lru
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -60,3 +64,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+volumes:
+  redis-data:

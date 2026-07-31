@@ -37,9 +37,9 @@ REDIS_TRAFFIC_MAX_TILE_BYTES=2097152
 REDIS_TRAFFIC_MAX_TOTAL_BYTES=335544320
 ```
 
-No local cache directory, persistent volume, or filesystem lock is required. The
-web and one-shot builder containers must use the same Redis
-endpoint and namespace.
+The bundled Redis service uses an AOF-backed named Docker volume. Managed
+production Redis should provide equivalent replication/persistence. The web and
+one-shot builder containers must use the same Redis endpoint and namespace.
 
 ## Manual production refresh
 
@@ -81,13 +81,13 @@ The builder:
 3. Precomputes HERE traffic lines and pulse points into zoom 7–14 vector tiles.
 4. Gzip-compresses the dashboard payload and each vector tile.
 5. Rejects individual or total output that exceeds configured Redis budgets.
-6. Writes all versioned tile keys with TTLs.
-7. Writes the versioned dashboard key with the same TTL.
-8. Publishes the current-version pointer last.
+6. Writes persistent versioned tiles, dashboard payload, and completeness manifest.
+7. Publishes the persistent current-version pointer last.
+8. Applies the configured retirement TTL to the replaced version.
 
-A failed build never replaces the active pointer. Previous immutable versions stay
-available until their TTL expires, allowing in-flight browsers to finish using an
-older tile URL.
+A failed build never replaces the active pointer. The active snapshot does not
+expire; previous immutable versions remain available until their retirement TTL
+expires, allowing in-flight browsers to finish using an older tile URL.
 
 ## Production runtime behavior
 
@@ -106,8 +106,10 @@ curl -fsS http://127.0.0.1:3000/api/v1/dashboard/version
 curl -fsS http://127.0.0.1:3000/api/v1/traffic/snapshot
 ```
 
-The health response must report `redis: "ok"`. The returned tile version, Flow
-`sourceRunId`, and slot must match the accepted automation run. Tile requests use
+The health response must report `redis: "ok"` and `snapshot.status: "ok"`.
+Readiness checks Redis, the dashboard payload, manifest, and one real tile
+without querying MySQL. The returned tile version, Flow `sourceRunId`, and slot
+must match the accepted automation run. Tile requests use
 `/api/v1/traffic/tiles/{version}/{z}/{x}/{y}` and return an immutable one-year
 browser cache header.
 
@@ -128,6 +130,7 @@ Monitor:
 - builder duration and failures;
 - Redis connection latency and errors.
 
-Use an `allkeys-lru` or approved equivalent eviction policy. If normal operation
-approaches the total budget, increase the Redis node size before raising the
-application limit.
+Use a `volatile-lru` or approved equivalent eviction policy so expiring cache
+entries and retired versions are reclaimed before the persistent active
+snapshot. If normal operation approaches the total budget, increase the Redis
+node size before raising the application limit.

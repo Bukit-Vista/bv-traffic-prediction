@@ -117,8 +117,8 @@ Demo mode defaults off and is rejected when enabled in production. The website r
 
 The community OSM tile service is best-effort for internal/demo use. Keep attribution, normal browser caching, and referrers enabled; do not proxy, prefetch, or bulk-download. Public-scale deployments must configure a managed or self-hosted OSM-derived source.
 
-`GET /api/v1/health` checks the application, read-only database connection, and
-configured Redis cache without contacting HERE.
+`GET /api/v1/health` checks Redis plus the active dashboard payload, manifest,
+and a real vector tile. It deliberately does not query MySQL or contact HERE.
 Collector alert state is public through `GET /api/v1/traffic/overview`; detailed history is restricted to
 `GET /api/v1/operations/collectors/**` with `Authorization: Bearer <OPERATIONS_API_TOKEN>`. Raw collector
 errors, provider payloads, and credentials are never returned.
@@ -176,7 +176,13 @@ docker compose -f docker-compose.yaml -f docker-compose.local.yaml \
   --profile maintenance run --rm snapshot-builder
 ```
 
-Run `npm run snapshot:build` from the automation workflow after Flow and Route writes have completed. The command generates and validates the dashboard payload and vector tiles, writes versioned Redis keys with TTLs, and publishes the current-version pointer only after all values are ready. See [the snapshot runbook](docs/traffic-snapshot-runbook.md).
+Invoke the protected refresh endpoint from the automation workflow immediately
+after Flow and Route writes have committed successfully. This performs one
+bounded MySQL refresh per accepted update; every browser request continues to
+read Redis. The active payload, manifest, pointer, and tiles remain persistent
+until replacement. After a new version is published, the previous version
+receives the configured retirement TTL. See
+[the snapshot runbook](docs/traffic-snapshot-runbook.md).
 
 The OpenAPI contract is [docs/openapi.yaml](docs/openapi.yaml). Automation ownership and future mobility gates remain documented in [docs/automation-team-alignment.md](docs/automation-team-alignment.md).
 The implemented Step 3 contract, database-view handoff, and release gate are recorded in [docs/step-3-source-dashboard.md](docs/step-3-source-dashboard.md).

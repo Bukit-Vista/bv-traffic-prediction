@@ -417,7 +417,7 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
       }
       if (controller.signal.aborted) return false;
       if (syncFailed) {
-        setRefreshError("The latest-data check failed. Automatic recovery is running; previous valid data remains visible.");
+        setRefreshError("The latest-data check failed. The previous valid snapshot remains visible; an authorized manual refresh may be required.");
         setRefreshing(false);
         return true;
       }

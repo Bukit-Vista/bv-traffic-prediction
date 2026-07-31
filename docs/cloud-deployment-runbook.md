@@ -19,7 +19,7 @@ workloads. They do not run inside the public web container.
 | Database access | Private network, TLS, and a SELECT-only web account |
 | Cache store | ElastiCache Redis OSS/Valkey for JSON, GeoJSON, dashboard state, and vector tiles |
 | Snapshot behavior | Authorized manual refresh is the production default; the scheduled worker is an explicit opt-in profile |
-| Cache retention | Versioned traffic keys expire after 48 hours |
+| Cache retention | Active traffic version persists; replaced versions expire after 48 hours |
 | Reverse proxy | Caddy terminates TLS and proxies to the web container |
 | Redis | Private ElastiCache Redis OSS/Valkey for all shared application cache data |
 | S3/CloudFront | Not required to run the current app; consider during scale-out |
@@ -275,10 +275,13 @@ BASEMAP_ATTRIBUTION="Required attribution text"
 ```
 
 The per-entry limit is measured after gzip compression. The default 8 MiB ceiling
-prevents one response from crowding out the cache. All entries have TTLs, and the
-ElastiCache parameter group should use `allkeys-lru` (or the approved equivalent)
-so old keys are evicted under pressure. A 512 MiB node is a starting size, not
-512 MiB of guaranteed payload capacity; monitor bytes used, evictions, and hit rate.
+prevents one response from crowding out the cache. The active traffic snapshot
+is persistent; replaced versions and normal JSON cache entries have TTLs. The
+ElastiCache parameter group should use `volatile-lru` (or the approved
+equivalent) so expiring JSON entries and retired versions are evicted before the
+persistent active snapshot. A 512 MiB node is a starting size,
+not 512 MiB of guaranteed payload capacity; monitor bytes used, evictions, and
+hit rate.
 
 Use `REDIS_TRAFFIC_CACHE_MODE=prefer` for the MVP:
 
@@ -350,25 +353,20 @@ account.
 
 ## 11. Redis traffic-cache lifecycle
 
-The normal automatic sequence is:
+The normal event-driven sequence is:
 
-1. Collectors commit Flow and Route data to RDS MySQL.
-2. The long-running worker reaches the next aligned `:12` or `:42` run.
-3. The worker reads a reconciled dashboard state from MySQL.
+1. Collectors commit and accept Flow and Route data in RDS MySQL.
+2. The successful automation step calls the protected dashboard refresh endpoint.
+3. The web service performs one bounded, shared-lock-protected MySQL refresh.
 4. It creates and validates the compressed dashboard payload and vector tiles.
-5. It writes deterministic versioned Redis keys with 48-hour TTLs.
+5. It writes the new version as persistent Redis values.
 6. It atomically activates the version by writing the current pointer last.
-7. It prewarms enabled mobility resources.
-8. Browsers discover the new pointer during their 30-second version poll and
-   update without user action.
+7. It assigns the configured retirement TTL to the replaced version.
+8. Browsers discover the new pointer during their 30-second Redis version poll.
 
-If no valid snapshot exists, a normal dashboard request performs the same
-materialization from the latest validated MySQL data. This and the one-shot
-builder are recovery paths; the long-running worker is the normal scheduler.
-
-Every successful build preserves the active version during validation. Previous
-versioned values remain available until their TTL expires, and a failed build does
-not change the active pointer.
+Public traffic never materializes missing cache data and never polls MySQL.
+Every successful build preserves the active version during validation; a failed
+build does not change the active pointer.
 
 A one-shot recovery build can execute from the deployed project directory:
 

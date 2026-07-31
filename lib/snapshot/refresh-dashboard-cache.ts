@@ -7,7 +7,10 @@ import {
 import { ApiUnavailableError } from "@/lib/api/core";
 import type { SourceDashboardData } from "@/lib/dashboard/types";
 import { ensureLatestTrafficSnapshot } from "@/lib/snapshot/ensure-traffic-snapshot";
-import { readCurrentDashboardSnapshot } from "@/lib/snapshot/traffic-snapshot";
+import {
+  readCurrentDashboardSnapshot,
+  trafficSnapshotReadiness
+} from "@/lib/snapshot/traffic-snapshot";
 
 export type DashboardCacheRefreshResult = {
   dashboard: SourceDashboardData;
@@ -47,7 +50,11 @@ async function performRefresh(): Promise<DashboardCacheRefreshResult> {
 
   const live = await getMySqlSourceDashboardData();
   const current = await readCurrentDashboardSnapshot();
-  if (current && dashboardCacheMatches(live, current)) {
+  if (
+    current &&
+    dashboardCacheMatches(live, current) &&
+    (await trafficSnapshotReadiness()).status === "ok"
+  ) {
     return { dashboard: current, cacheAction: "reused" };
   }
   try {

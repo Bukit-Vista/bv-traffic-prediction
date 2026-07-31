@@ -25,8 +25,9 @@ export type RedisCacheEnv = {
 
 export type RedisCacheStore = {
   get(key: string): Promise<string | null>;
-  set(key: string, value: string, options: { EX: number; NX?: true }): Promise<unknown>;
+  set(key: string, value: string, options?: { EX?: number; NX?: true }): Promise<unknown>;
   del(key: string): Promise<unknown>;
+  expire?(key: string, seconds: number): Promise<unknown>;
   ping(): Promise<string>;
 };
 
@@ -138,20 +139,32 @@ export async function getRedisCacheStore(env: RedisCacheEnv = process.env): Prom
   const config = getRedisCacheConfig(env);
   if (!config.enabled || !config.url) return null;
   if (singletonClient?.isReady) return singletonClient as RedisCacheStore;
+  if (singletonClient && !singletonClient.isOpen) {
+    singletonClient = null;
+    connectingClient = null;
+  }
   if (!singletonClient) {
-    singletonClient = createClient({
+    const client = createClient({
       url: config.url,
       socket: {
         connectTimeout: config.connectTimeoutMs,
-        // Bound initial request latency when Redis is unavailable. A later
-        // request can establish a fresh connection after this attempt fails.
-        reconnectStrategy: (retries) => retries >= 2 ? false : Math.min(50 * 2 ** retries, 500)
+        // Survive normal Redis restarts and managed failovers. Attempts remain
+        // bounded; after the client closes, a later request creates a fresh one.
+        reconnectStrategy: (retries) =>
+          retries >= 10 ? false : Math.min(100 * 2 ** retries, 2_000)
       }
+    }) as RedisClientType;
+    client.on("error", (error) => warnCacheFailure("connection", error));
+    client.on("end", () => {
+      if (singletonClient !== client) return;
+      singletonClient = null;
+      connectingClient = null;
     });
-    singletonClient.on("error", (error) => warnCacheFailure("connection", error));
+    singletonClient = client;
   }
-  connectingClient ??= singletonClient.connect()
-    .then(() => singletonClient as RedisClientType)
+  const client = singletonClient;
+  connectingClient ??= client.connect()
+    .then(() => client)
     .catch((error) => {
       connectingClient = null;
       throw error;

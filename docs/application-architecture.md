@@ -404,7 +404,10 @@ Configured limits protect Redis from unbounded payloads:
 - dashboard entry limit;
 - individual tile limit;
 - total traffic-snapshot limit;
-- snapshot TTL.
+- retirement TTL for replaced snapshots.
+
+The active snapshot has no TTL. After atomic activation, the replaced
+dashboard, manifest, and tiles receive the configured retirement TTL.
 
 ## 9. Freshness and failure behavior
 
@@ -443,7 +446,7 @@ manually changed.
 | `/api/v1/operations/*` | Authorized collector details |
 | `/api/v1/ops/*` | Authorized source-contract and run diagnostics |
 | `/api/v1/export/*` | CSV and GeoJSON exports |
-| `/api/v1/health` | Application, MySQL, and Redis readiness |
+| `/api/v1/health` | Redis and active-snapshot completeness readiness; no MySQL query |
 
 The authoritative request and response details are maintained in
 `docs/openapi.yaml`.
@@ -505,8 +508,8 @@ The Dockerfile produces two runtime targets:
 `docker-compose.local.yaml` adds a local Redis instance configured with:
 
 - 512 MiB maximum memory;
-- `allkeys-lru` eviction;
-- no persistence, because the cache is rebuildable.
+- `volatile-lru` eviction so the persistent active snapshot is protected;
+- append-only persistence on a named Docker volume.
 
 Production should replace the local Redis service with private
 Redis/ElastiCache and provide the RDS and cache endpoints through deployment
