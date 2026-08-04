@@ -30,6 +30,7 @@ import {
   DASHBOARD_VERSION_POLL_MS,
   nextDashboardRefreshDelayMs
 } from "@/lib/snapshot/refresh-schedule";
+import { withBasePath } from "@/lib/urls/base-path";
 
 type View = "live" | "mobility" | "routes" | "health";
 type Mode = "latest" | "historical";
@@ -529,7 +530,7 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
     if (refreshing) return;
     setRefreshing(true);
     try {
-      const response = await fetch("/api/v1/traffic/snapshot", { cache: "no-store" });
+      const response = await fetch(withBasePath("/api/v1/traffic/snapshot"), { cache: "no-store" });
       const result = await json<{ data: SourceDashboardData }>(response);
       const dashboard = result.data;
       etagCacheRef.current.clear();
@@ -563,7 +564,7 @@ export function DashboardShell({ initialData, basemapConfig, airportTourismRoute
           <div className="flex items-center justify-between px-2">
             <button className="rounded-xl text-left transition-opacity hover:opacity-85" onClick={() => setView(mobilityViewEnabled ? "mobility" : "live")} aria-label="Open bukitVISTA Bali Traffic home">
               <Image
-                src="/brand/bukit-vista-logo.png"
+                src={withBasePath("/brand/bukit-vista-logo.png")}
                 alt="bukitVISTA"
                 width={2048}
                 height={1260}
@@ -625,7 +626,7 @@ function DashboardBootOverlay({ completed, total, label }: { completed: number; 
   return <div className="fixed inset-0 z-[120] grid place-items-center bg-[#eef3ef]" role="status" aria-live="polite" aria-label="Preparing dashboard">
     <div className="w-[min(420px,calc(100%-32px))] rounded-3xl border border-[#d4ded8] bg-white p-7 text-center shadow-2xl sm:p-9">
       <Image
-        src="/brand/bukit-vista-logo.png"
+        src={withBasePath("/brand/bukit-vista-logo.png")}
         alt="bukitVISTA"
         width={2048}
         height={1260}
@@ -1400,7 +1401,7 @@ function LiveView({ active, data, overview, mapData, config, minConfidence, setM
       <header className={mapExpanded ? "mb-2 flex min-h-14 shrink-0 items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#222b28] px-3 text-white shadow-2xl sm:px-4" : "hidden"}>
         <div className="flex min-w-0 items-center gap-3">
           <Image
-            src="/brand/bukit-vista-logo.png"
+            src={withBasePath("/brand/bukit-vista-logo.png")}
             alt="bukitVISTA"
             width={2048}
             height={1260}
@@ -1511,7 +1512,7 @@ function RoutesView({ routes, selected, setSelectedRouteId, at, config }: { rout
         setHistoryLoading(false);
         return () => controller.abort();
       }
-      void fetch(`/api/v1/routes/${selected.id}/history?hours=12`, { signal: controller.signal })
+      void fetch(withBasePath(`/api/v1/routes/${selected.id}/history?hours=12`), { signal: controller.signal })
         .then((response) => json<{ data: { points: RouteHistoryPoint[]; window: { startUtc: string; endExclusiveUtc: string }; coverage: HistoryCoverage } }>(response))
         .then((result) => {
           if (controller.signal.aborted) return;

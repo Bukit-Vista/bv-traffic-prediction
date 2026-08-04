@@ -1,3 +1,5 @@
+import { withBasePath } from "@/lib/urls/base-path";
+
 /**
  * MapLibre fetches vector tiles in a Web Worker. Keep URL templates absolute so
  * same-origin API paths are not resolved against MapLibre's blob worker URL.
@@ -6,7 +8,8 @@
 export function resolveTrafficTileUrlTemplate(template: string, origin: string) {
   if (/^https?:\/\//i.test(template)) return template;
   const normalizedOrigin = origin.replace(/\/+$/, "");
-  const normalizedPath = template.startsWith("/") ? template : `/${template}`;
+  const rootRelativePath = template.startsWith("/") ? template : `/${template}`;
+  const normalizedPath = withBasePath(rootRelativePath);
   return `${normalizedOrigin}${normalizedPath}`;
 }
 
