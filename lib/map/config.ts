@@ -1,4 +1,5 @@
 import type { BasemapConfig } from "@/lib/dashboard/types";
+import { withBasePath } from "@/lib/urls/base-path";
 
 const OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const OSM_ATTRIBUTION =
@@ -26,7 +27,7 @@ export function getBasemapConfig(env: MapEnv = process.env): BasemapConfig {
     minZoom: 7,
     maxZoom: 19,
     deploymentMode: env.BASEMAP_DEPLOYMENT_MODE === "managed" ? "managed" : "demo-internal",
-    boundaryUrl: "/geography/bali-province.geojson",
-    regencyBoundaryUrl: "/geography/bali-regencies.geojson"
+    boundaryUrl: withBasePath("/geography/bali-province.geojson"),
+    regencyBoundaryUrl: withBasePath("/geography/bali-regencies.geojson")
   };
 }

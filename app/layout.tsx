@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { withBasePath } from "@/lib/urls/base-path";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 
@@ -7,8 +8,8 @@ export const metadata: Metadata = {
   description:
     "Traffic conditions, route performance, and mobility insights across Bali.",
   icons: {
-    icon: "/brand/bukit-vista-logo.png",
-    apple: "/brand/bukit-vista-logo.png"
+    icon: withBasePath("/brand/bukit-vista-logo.png"),
+    apple: withBasePath("/brand/bukit-vista-logo.png")
   }
 };
 

@@ -1,3 +1,5 @@
+import { withBasePath } from "@/lib/urls/base-path";
+
 export type ConditionalResult<T> = { modified: false } | { modified: true; value: T };
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -14,7 +16,7 @@ export async function conditionalFetchJson<T>(
   signal: AbortSignal
 ): Promise<ConditionalResult<T>> {
   const previousEtag = etags.get(url);
-  const response = await fetch(url, {
+  const response = await fetch(withBasePath(url), {
     signal,
     cache: "no-cache",
     headers: previousEtag ? { "If-None-Match": previousEtag } : undefined

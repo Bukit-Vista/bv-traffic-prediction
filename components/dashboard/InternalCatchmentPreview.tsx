@@ -29,6 +29,7 @@ import { guideOdFlowsByTraffic } from "@/lib/map/traffic-guided-od";
 import { clearCachedJson, fetchCachedJson } from "@/lib/ui/client-data-cache";
 import { publicDataMessage, publicModelVersion } from "@/lib/ui/public-data-message";
 import { nextDashboardRefreshDelayMs } from "@/lib/snapshot/refresh-schedule";
+import { withBasePath } from "@/lib/urls/base-path";
 
 type Metric = "presence" | "inbound" | "outbound";
 type FlowDirection = "both" | "outbound" | "inbound";
@@ -652,7 +653,7 @@ export function InternalCatchmentPreview({
       <header className={mapExpanded ? "mb-2 flex min-h-14 shrink-0 items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#222b28] px-3 text-white shadow-2xl sm:px-4" : "hidden"}>
         <div className="flex min-w-0 items-center gap-3">
           <Image
-            src="/brand/bukit-vista-logo.png"
+            src={withBasePath("/brand/bukit-vista-logo.png")}
             alt="bukitVISTA"
             width={2048}
             height={1260}

@@ -7,6 +7,7 @@ import {
   MAX_HEATMAP_RANGE_DAYS,
   type RouteHeatmapRow
 } from "@/lib/analytics/heatmap";
+import { withBasePath } from "@/lib/urls/base-path";
 
 type HeatmapResponse = {
   startDate: string;
@@ -153,9 +154,9 @@ export function HeatmapExplorer({
     setLoading(true);
     try {
       const response = await fetch(
-        `/api/heatmap?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(
+        withBasePath(`/api/heatmap?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(
           endDate
-        )}`,
+        )}`),
         { cache: "no-store" }
       );
       const payload = (await response.json()) as Partial<HeatmapResponse> & {
@@ -193,9 +194,9 @@ export function HeatmapExplorer({
     setLoading(true);
     try {
       const response = await fetch(
-        `/api/heatmap?start=${encodeURIComponent(
+        withBasePath(`/api/heatmap?start=${encodeURIComponent(
           nextStartDate
-        )}&end=${encodeURIComponent(nextEndDate)}`,
+        )}&end=${encodeURIComponent(nextEndDate)}`),
         { cache: "no-store" }
       );
       const payload = (await response.json()) as Partial<HeatmapResponse> & {

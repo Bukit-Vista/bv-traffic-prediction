@@ -1,3 +1,5 @@
+import { withBasePath } from "@/lib/urls/base-path";
+
 type RetryJsonOptions = {
   signal: AbortSignal;
   timeoutMs?: number;
@@ -42,7 +44,7 @@ export async function fetchJsonWithTimeoutRetry<T>(url: string, options: RetryJs
     }, timeoutMs);
 
     try {
-      const response = await fetch(requestUrl(url, attempt), {
+      const response = await fetch(withBasePath(requestUrl(url, attempt)), {
         signal: attemptController.signal,
         cache: "no-cache"
       });
