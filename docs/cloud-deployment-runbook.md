@@ -40,7 +40,7 @@ Internet
 Caddy on EC2 (TLS, compression, access logs)
    |
    v
-Docker: Next.js web container (one process, port 3000)
+Docker: Next.js web container (one process, port 7000)
    |                  |
    |                  v
    |             ElastiCache Redis/Valkey <--- authorized manual refresh
@@ -117,7 +117,7 @@ Provision:
    operations API token.
 7. An EC2 security group allowing:
    - inbound `80/tcp` and `443/tcp` from the internet;
-   - no public access to container port `3000`;
+   - no public access to container port `7000`;
    - administrative access only through the approved management path.
 8. An RDS security group allowing `3306/tcp` only from the EC2 security group and
    approved collector/worker security groups.
@@ -150,7 +150,7 @@ The Docker deployment must define these workloads:
 The web workload uses the minimal Next.js standalone image. Snapshot workloads use
 a separate worker image containing production dependencies and only the two
 snapshot entrypoints. All workloads share the environment contract, Redis endpoint,
-and Redis namespace. Publish container port `3000` only to `127.0.0.1:3000` on the
+and Redis namespace. Publish container port `7000` only to `127.0.0.1:7000` on the
 host. Use `restart: unless-stopped` for the web and snapshot-worker containers.
 The worker timing is fixed at `:12` and `:42`; its renewable Redis lease prevents
 concurrent refreshes, and its lightweight identity check skips full reads when
@@ -332,7 +332,7 @@ Do not build production images from an uncommitted EC2 working tree. Do not use 
 floating `latest` tag as the rollback identity.
 
 Caddy remains on the host for the MVP. Install the repository template, replace the
-hostname, validate it, and proxy only to `127.0.0.1:3000`.
+hostname, validate it, and proxy only to `127.0.0.1:7000`.
 
 ## 10. Database and release gates
 

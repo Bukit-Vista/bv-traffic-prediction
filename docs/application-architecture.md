@@ -142,7 +142,7 @@ layers.
 
 ### 5.1 Web
 
-The web container runs the Next.js standalone server on port 3000. It provides:
+The web container runs the Next.js standalone server on port 7000. It provides:
 
 - the server-rendered dashboard;
 - versioned `/api/v1` HTTP endpoints;
