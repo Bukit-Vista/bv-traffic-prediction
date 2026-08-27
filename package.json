@@ -7,7 +7,7 @@
     "npm": ">=11"
   },
   "scripts": {
-    "dev:web": "next dev",
+    "dev:web": "next dev -p 7000",
     "dev": "npm run dev:web",
     "boundary:import": "node --import tsx scripts/import-bali-boundary.ts",
     "boundary:validate": "node --import tsx scripts/import-bali-boundary.ts --check",
@@ -20,7 +20,7 @@
     "snapshot:build": "node --import tsx scripts/build-traffic-snapshot.ts",
     "snapshot:worker": "node --import tsx scripts/run-traffic-snapshot-worker.ts",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 7000",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",

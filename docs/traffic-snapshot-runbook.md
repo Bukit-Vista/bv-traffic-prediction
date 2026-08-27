@@ -106,9 +106,9 @@ pointer is published. No new production environment settings are required.
 After every build, verify:
 
 ```bash
-curl -fsS http://127.0.0.1:3000/api/v1/health
-curl -fsS http://127.0.0.1:3000/api/v1/dashboard/version
-curl -fsS http://127.0.0.1:3000/api/v1/traffic/snapshot
+curl -fsS http://127.0.0.1:7000/api/v1/health
+curl -fsS http://127.0.0.1:7000/api/v1/dashboard/version
+curl -fsS http://127.0.0.1:7000/api/v1/traffic/snapshot
 ```
 
 The health response must report `redis: "ok"`, `snapshot.status: "ok"`, and

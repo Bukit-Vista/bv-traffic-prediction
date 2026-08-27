@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = process.env.PLAYWRIGHT_PORT ?? "3000";
+const port = process.env.PLAYWRIGHT_PORT ?? "7000";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -9,7 +9,7 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: {
-    command: `npm run dev:web -- -p ${port}`,
+    command: `npx next dev -p ${port}`,
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000
